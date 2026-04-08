@@ -35,19 +35,14 @@ describe('tool execution support', () => {
     expect(result.hasToolUse).toBe(true);
   });
 
-  test('classifier adds tool-execution capability when tools detected', () => {
+  test('classifier detects tools but does not add tool-execution capability', () => {
     const messages: ChatMessage[] = [
       { role: 'user', content: 'Call the function to get the current time' },
     ];
 
     const result = classifyRequest(messages);
     expect(result.hasToolUse).toBe(true);
-    expect(result.requiredCapabilities).toContain('tool-execution');
-    // tool-execution should be a stage before reasoning
-    const toolStageIdx = result.suggestedStages.findIndex((s) => s.includes('tool-execution'));
-    const reasoningStageIdx = result.suggestedStages.findIndex((s) => s.includes('reasoning'));
-    expect(toolStageIdx).toBeGreaterThanOrEqual(0);
-    expect(toolStageIdx).toBeLessThan(reasoningStageIdx);
+    expect(result.requiredCapabilities).not.toContain('tool-execution');
   });
 
   test('classifier does not detect tools in normal text', () => {

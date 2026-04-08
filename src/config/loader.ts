@@ -1,7 +1,9 @@
 import { readFileSync, existsSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_POLICY, DEFAULT_PROFILES, SYNTHETIC_MODEL_MAP } from './defaults.js';
+import { CAPABILITIES } from '../types/index.js';
 import type { EmberSynthConfig, NodeDefinition, NodeAuth, RoutingProfile } from '../types/index.js';
+import { log } from '../logger/index.js';
 
 const CONFIG_PATHS = [
   './embersynth.yaml',
@@ -86,6 +88,34 @@ function normalizeProfile(raw: Record<string, unknown>): RoutingProfile {
   };
 }
 
+function validateConfig(config: EmberSynthConfig): string[] {
+  const warnings: string[] = [];
+  const validCapabilities = new Set(CAPABILITIES);
+  
+  for (const node of config.nodes) {
+    for (const cap of node.capabilities) {
+      if (!validCapabilities.has(cap)) {
+        warnings.push(`Node "${node.id}": unknown capability "${cap}"`);
+      }
+    }
+    if (!['http', 'https'].includes(node.transport)) {
+      warnings.push(`Node "${node.id}": unknown transport "${node.transport}"`);
+    }
+    if (!['none', 'bearer', 'header'].includes(node.auth.type)) {
+      warnings.push(`Node "${node.id}": unknown auth type "${node.auth.type}"`);
+    }
+  }
+  
+  const profileIds = new Set(config.profiles.map(p => p.id));
+  for (const [model, profileId] of Object.entries(config.syntheticModels)) {
+    if (!profileIds.has(profileId)) {
+      warnings.push(`Synthetic model "${model}": references unknown profile "${profileId}"`);
+    }
+  }
+  
+  return warnings;
+}
+
 /** Return the first config file path that exists, or undefined */
 export function resolveConfigPath(configPath?: string): string | undefined {
   if (configPath) return existsSync(configPath) ? configPath : undefined;
@@ -136,6 +166,11 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
       ...((rawConfig?.syntheticModels as Record<string, string>) ?? {}),
     },
   };
+
+  const warnings = validateConfig(config);
+  for (const w of warnings) {
+    log.warn('config validation', { warning: w });
+  }
 
   return config;
 }

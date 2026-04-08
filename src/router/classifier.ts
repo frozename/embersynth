@@ -97,11 +97,8 @@ export function classifyRequest(messages: ChatMessage[]): RequestClassification 
 
   // Build pipeline stages in execution order
 
-  // Tool execution stage (before reasoning)
-  if (hasToolUse) {
-    requiredCapabilities.push('tool-execution');
-    stages.push(['tool-execution']);
-  }
+  // Tool use detected — tools are passed through to the reasoning node
+  // No separate stage needed; the adapter handles tool serialization
 
   // Memory stage (recall prior context)
   if (hasMemoryNeed) {

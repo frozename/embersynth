@@ -74,9 +74,12 @@ export class NodeRegistry {
   ): NodeDefinition[] {
     return nodes.filter((node) => {
       const h = this.health.get(node.id);
-      if (!h) return true; // unknown = allow through
+      // Allow 'unknown' state through — this enables traffic during cold-start before
+      // the first health probe completes. Nodes transition to healthy/degraded/unhealthy
+      // after the first probe. Blocking unknown would prevent all traffic on fresh startup.
+      if (!h) return true;
       if (h.state === 'healthy') return true;
-      if (h.state === 'unknown') return true; // haven't checked yet
+      if (h.state === 'unknown') return true;
       if (allowDegraded && h.state === 'degraded') return true;
       return false;
     });

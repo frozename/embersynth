@@ -190,7 +190,8 @@ export async function routeStreaming(
     log.info('streaming not supported by final node adapter, falling back to non-streaming', {
       nodeId: finalStage.nodeId,
     });
-    const result = await route(request, config, registry, traceCtx);
+    // Ensure no traceCtx is passed to route() on fallback to prevent duplicate events
+    const result = await route(request, config, registry);
     if (!result.ok) return result;
 
     // Convert non-streaming result to a single-chunk stream

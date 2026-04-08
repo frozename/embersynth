@@ -147,13 +147,15 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const url = `${node.endpoint}/v1/chat/completions`;
     const messages = prepareMessages(request);
 
-    const body = {
+    const body: Record<string, unknown> = {
       model: node.modelId ?? 'default',
       messages: formatMessages(messages),
       temperature: request.temperature,
       max_tokens: request.maxTokens,
       stream: true,
     };
+    if (request.tools) body.tools = request.tools;
+    if (request.toolChoice) body.tool_choice = request.toolChoice;
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);

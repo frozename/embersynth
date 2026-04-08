@@ -154,9 +154,17 @@ export async function executePlanStreaming(
   let streamNodeId = finalStage.nodeId;
 
   // Try primary node, then fallbacks
-  const candidates = [finalStage.nodeId, ...registry.findByCapabilities([finalStage.capability])
-    .filter(n => n.id !== finalStage.nodeId && n.enabled)
-    .map(n => n.id)];
+  const allCandidates = registry.findByCapabilities([finalStage.capability]);
+  const tagFiltered = registry.filterByTags(
+    allCandidates.filter((n) => n.id !== finalStage.nodeId),
+    profile.requiredTags,
+    profile.excludedTags,
+  );
+  const healthFiltered = policy.requireHealthy
+    ? registry.filterByHealth(tagFiltered, profile.allowDegradedNodes)
+    : tagFiltered;
+  const sorted = registry.sortByPriority(healthFiltered);
+  const candidates = [finalStage.nodeId, ...sorted.map((n) => n.id)];
 
   for (const candidateId of candidates) {
     if (failedStreamNodes.has(candidateId)) continue;
@@ -283,7 +291,7 @@ async function executeStageWithFallback(
   policy: RoutingPolicy,
   profile: RoutingProfile,
   failedNodeIds: Set<string>,
-  options?: { temperature?: number; maxTokens?: number },
+  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
   rlog?: Log,
 ): Promise<StageResult | null> {
   // Try the primary node first
@@ -354,7 +362,7 @@ async function attemptNode(
   isLastStage: boolean,
   registry: NodeRegistry,
   policy: RoutingPolicy,
-  options?: { temperature?: number; maxTokens?: number },
+  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
   rlog?: Log,
 ): Promise<StageResult | null> {
   const node = registry.getById(nodeId);
@@ -371,6 +379,8 @@ async function attemptNode(
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
     evidence: compressedEvidence,
+    tools: options?.tools,
+    toolChoice: options?.toolChoice,
   };
 
   if (!isLastStage) {
