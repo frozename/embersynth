@@ -1,0 +1,108 @@
+# EmberSynth — Example multi-node configuration
+# Copy to ./embersynth.yaml and adjust endpoints to match your setup.
+
+server:
+  host: "127.0.0.1"
+  port: 7777
+
+nodes:
+  # ── Reasoning node (e.g. llama.cpp, Ollama, vLLM) ──
+  - id: reasoning-primary
+    label: "Local Reasoning (Primary)"
+    endpoint: "http://localhost:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [local, private, primary]
+    providerType: openai-compatible
+    modelId: "default"
+    priority: 1
+    auth:
+      type: none
+    health:
+      endpoint: /health
+      intervalMs: 30000
+      timeoutMs: 5000
+      unhealthyAfter: 3
+    timeout:
+      requestMs: 120000
+      connectMs: 5000
+    optimization:
+      quantization: "Q4_K_M"
+      contextWindow: 8192
+
+  # ── Vision node (e.g. llava, bakllava, moondream) ──
+  - id: vision-local
+    label: "Local Vision"
+    endpoint: "http://localhost:8081"
+    transport: http
+    enabled: true
+    capabilities: [vision]
+    tags: [local, private]
+    providerType: openai-compatible
+    modelId: "llava"
+    priority: 5
+    auth:
+      type: none
+    health:
+      endpoint: /health
+      intervalMs: 30000
+    timeout:
+      requestMs: 180000
+
+  # ── Secondary reasoning on LAN ──
+  - id: reasoning-lan
+    label: "LAN Reasoning"
+    endpoint: "http://192.168.1.100:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [lan, private]
+    providerType: openai-compatible
+    modelId: "mistral"
+    priority: 10
+    auth:
+      type: bearer
+      token: "${LAN_NODE_TOKEN}"
+    health:
+      intervalMs: 60000
+      timeoutMs: 10000
+    timeout:
+      requestMs: 120000
+
+profiles:
+  - id: auto
+    label: "Automatic"
+    description: "Balanced routing with automatic capability selection"
+    preferLowerPriority: true
+    allowDegradedNodes: false
+
+  - id: fast
+    label: "Fast"
+    description: "Prefer lowest latency, minimize pipeline stages"
+    maxStages: 1
+    preferLowerPriority: true
+
+  - id: private
+    label: "Private"
+    description: "Only use nodes tagged private"
+    requiredTags: [private]
+
+  - id: vision
+    label: "Vision"
+    description: "Vision-capable pipeline with synthesis"
+    preferredCapabilities: [vision]
+    synthesisRequired: true
+
+syntheticModels:
+  fusion-auto: auto
+  fusion-fast: fast
+  fusion-private: private
+  fusion-vision: vision
+
+policy:
+  fallbackEnabled: true
+  maxRetries: 2
+  retryDelayMs: 500
+  requireHealthy: true
+  evidenceCompression: false

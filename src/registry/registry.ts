@@ -1,0 +1,128 @@
+import type { NodeDefinition, Capability, HealthStatus, HealthState } from '../types/index.js';
+
+export class NodeRegistry {
+  private nodes: Map<string, NodeDefinition> = new Map();
+  private health: Map<string, HealthStatus> = new Map();
+
+  load(nodes: NodeDefinition[]): void {
+    this.nodes.clear();
+    // Prune health entries for nodes no longer in config
+    const newIds = new Set(nodes.map((n) => n.id));
+    for (const id of this.health.keys()) {
+      if (!newIds.has(id)) this.health.delete(id);
+    }
+    for (const node of nodes) {
+      this.nodes.set(node.id, node);
+      // Initialize health as unknown
+      if (!this.health.has(node.id)) {
+        this.health.set(node.id, {
+          nodeId: node.id,
+          state: 'unknown',
+          consecutiveFailures: 0,
+        });
+      }
+    }
+  }
+
+  getAll(): NodeDefinition[] {
+    return Array.from(this.nodes.values());
+  }
+
+  getEnabled(): NodeDefinition[] {
+    return this.getAll().filter((n) => n.enabled);
+  }
+
+  getById(id: string): NodeDefinition | undefined {
+    return this.nodes.get(id);
+  }
+
+  /** Find enabled nodes that have ALL of the required capabilities */
+  findByCapabilities(required: Capability[]): NodeDefinition[] {
+    return this.getEnabled().filter((node) =>
+      required.every((cap) => node.capabilities.includes(cap)),
+    );
+  }
+
+  /** Find enabled nodes that have ANY of the given capabilities */
+  findByAnyCapability(capabilities: Capability[]): NodeDefinition[] {
+    return this.getEnabled().filter((node) =>
+      capabilities.some((cap) => node.capabilities.includes(cap)),
+    );
+  }
+
+  /** Filter nodes by tags (all required tags must be present, no excluded tags) */
+  filterByTags(
+    nodes: NodeDefinition[],
+    requiredTags?: string[],
+    excludedTags?: string[],
+  ): NodeDefinition[] {
+    return nodes.filter((node) => {
+      if (requiredTags?.length) {
+        if (!requiredTags.every((t) => node.tags.includes(t))) return false;
+      }
+      if (excludedTags?.length) {
+        if (excludedTags.some((t) => node.tags.includes(t))) return false;
+      }
+      return true;
+    });
+  }
+
+  /** Filter to only healthy (or optionally degraded) nodes */
+  filterByHealth(
+    nodes: NodeDefinition[],
+    allowDegraded = false,
+  ): NodeDefinition[] {
+    return nodes.filter((node) => {
+      const h = this.health.get(node.id);
+      if (!h) return true; // unknown = allow through
+      if (h.state === 'healthy') return true;
+      if (h.state === 'unknown') return true; // haven't checked yet
+      if (allowDegraded && h.state === 'degraded') return true;
+      return false;
+    });
+  }
+
+  /** Sort nodes by priority (lower number = higher priority) */
+  sortByPriority(nodes: NodeDefinition[]): NodeDefinition[] {
+    return [...nodes].sort((a, b) => a.priority - b.priority);
+  }
+
+  // ── Health management ──
+
+  updateHealth(nodeId: string, state: HealthState, latencyMs?: number, error?: string): void {
+    const existing = this.health.get(nodeId);
+    const now = Date.now();
+
+    const consecutiveFailures =
+      state === 'healthy' ? 0 : (existing?.consecutiveFailures ?? 0) + 1;
+
+    // Apply unhealthyAfter threshold: keep node as 'degraded' until
+    // consecutive failures reach the configured threshold.
+    let effectiveState = state;
+    if (state === 'unhealthy') {
+      const node = this.nodes.get(nodeId);
+      const threshold = node?.health?.unhealthyAfter ?? 3;
+      if (consecutiveFailures < threshold) {
+        effectiveState = 'degraded';
+      }
+    }
+
+    this.health.set(nodeId, {
+      nodeId,
+      state: effectiveState,
+      lastCheck: now,
+      lastSuccess: state === 'healthy' ? now : existing?.lastSuccess,
+      consecutiveFailures,
+      latencyMs,
+      error,
+    });
+  }
+
+  getHealth(nodeId: string): HealthStatus | undefined {
+    return this.health.get(nodeId);
+  }
+
+  getAllHealth(): HealthStatus[] {
+    return Array.from(this.health.values());
+  }
+}
