@@ -14,7 +14,7 @@ import type {
 } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 import { getAdapter } from '../adapters/index.js';
-import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from '../adapters/stream-markers.js';
+import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER, mergeToolCallDeltas, type ToolCallMap } from '../adapters/stream-markers.js';
 import { compressEvidence } from '../evidence/compressor.js';
 import { withRequestId } from '../logger/index.js';
 
@@ -155,7 +155,7 @@ export async function executePlanStreaming(
   let streamFirstChunk: string | null = null;
   let streamNodeId = finalStage.nodeId;
   let streamFinishReason = 'stop';
-  const toolCallMap = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>();
+  const toolCallMap: ToolCallMap = new Map();
 
   // Try primary node, then fallbacks
   const allCandidates = registry.findByCapabilities([finalStage.capability]);
@@ -257,29 +257,7 @@ export async function executePlanStreaming(
         // Emit the first chunk that was consumed during validation
         if (streamFirstChunk) {
           if (streamFirstChunk.startsWith(TOOL_CALLS_MARKER)) {
-            const deltas = JSON.parse(streamFirstChunk.slice(TOOL_CALLS_MARKER.length)) as Array<{
-              index: number; id?: string; type?: string;
-              function?: { name?: string; arguments?: string };
-            }>;
-            for (const d of deltas) {
-              const existing = toolCallMap.get(d.index);
-              if (existing) {
-                // Merge all fields from the delta
-                if (d.id) existing.id = d.id;
-                if (d.type) existing.type = d.type as 'function';
-                if (d.function?.name) existing.function.name = d.function.name;
-                if (d.function?.arguments) existing.function.arguments += d.function.arguments;
-              } else {
-                toolCallMap.set(d.index, {
-                  id: d.id ?? '',
-                  type: (d.type as 'function') ?? 'function',
-                  function: {
-                    name: d.function?.name ?? '',
-                    arguments: d.function?.arguments ?? '',
-                  },
-                });
-              }
-            }
+            mergeToolCallDeltas(toolCallMap, streamFirstChunk);
           } else if (streamFirstChunk.startsWith(FINISH_REASON_MARKER)) {
             streamFinishReason = streamFirstChunk.slice(FINISH_REASON_MARKER.length);
           } else {
@@ -296,30 +274,7 @@ export async function executePlanStreaming(
 
         for await (const text of streamGen) {
           if (text.startsWith(TOOL_CALLS_MARKER)) {
-            const deltas = JSON.parse(text.slice(TOOL_CALLS_MARKER.length)) as Array<{
-              index: number; id?: string; type?: string;
-              function?: { name?: string; arguments?: string };
-            }>;
-            for (const d of deltas) {
-              const existing = toolCallMap.get(d.index);
-              if (existing) {
-                // Merge all fields from the delta
-                if (d.id) existing.id = d.id;
-                if (d.type) existing.type = d.type as 'function';
-                if (d.function?.name) existing.function.name = d.function.name;
-                if (d.function?.arguments) existing.function.arguments += d.function.arguments;
-              } else {
-                // Start a new tool call
-                toolCallMap.set(d.index, {
-                  id: d.id ?? '',
-                  type: (d.type as 'function') ?? 'function',
-                  function: {
-                    name: d.function?.name ?? '',
-                    arguments: d.function?.arguments ?? '',
-                  },
-                });
-              }
-            }
+            mergeToolCallDeltas(toolCallMap, text);
             continue;
           }
           if (text.startsWith(FINISH_REASON_MARKER)) {
@@ -592,3 +547,4 @@ function buildIntermediatePrompt(capability: string): string {
       return `You are a ${capability} stage in a multi-step pipeline. Produce structured output for the next stage.`;
   }
 }
+
