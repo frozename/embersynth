@@ -14,6 +14,7 @@ import type {
 } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 import { getAdapter } from '../adapters/index.js';
+import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from '../adapters/stream-markers.js';
 import { compressEvidence } from '../evidence/compressor.js';
 import { withRequestId } from '../logger/index.js';
 
@@ -151,7 +152,10 @@ export async function executePlanStreaming(
   const finalStage = plan.stages[plan.stages.length - 1];
   const failedStreamNodes = new Set<string>();
   let streamGen: AsyncGenerator<string> | null = null;
+  let streamFirstChunk: string | null = null;
   let streamNodeId = finalStage.nodeId;
+  let streamFinishReason = 'stop';
+  const toolCallMap = new Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>();
 
   // Try primary node, then fallbacks
   const allCandidates = registry.findByCapabilities([finalStage.capability]);
@@ -164,7 +168,26 @@ export async function executePlanStreaming(
     ? registry.filterByHealth(tagFiltered, profile.allowDegradedNodes)
     : tagFiltered;
   const sorted = registry.sortByPriority(healthFiltered);
-  const candidates = [finalStage.nodeId, ...sorted.map((n) => n.id)];
+
+  let profileFiltered = sorted;
+  if (profile.preferLowerPriority === false) {
+    profileFiltered = profileFiltered.reverse();
+  }
+  if (profile.maxLatencyMs != null) {
+    profileFiltered = profileFiltered.filter((n) => {
+      const h = registry.getHealth(n.id);
+      return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
+    });
+  }
+  if (profile.preferredCapabilities?.length) {
+    const prefs = profile.preferredCapabilities;
+    profileFiltered.sort((a, b) => {
+      const aScore = prefs.filter((c) => a.capabilities.includes(c)).length;
+      const bScore = prefs.filter((c) => b.capabilities.includes(c)).length;
+      return bScore - aScore || a.priority - b.priority;
+    });
+  }
+  const candidates = [finalStage.nodeId, ...profileFiltered.map((n) => n.id)];
 
   for (const candidateId of candidates) {
     if (failedStreamNodes.has(candidateId)) continue;
@@ -188,14 +211,18 @@ export async function executePlanStreaming(
     };
 
     try {
-      // Test the connection with a non-streaming probe isn't practical for streaming,
-      // so we'll create the generator and let the ReadableStream handle errors
-      streamGen = candidateAdapter.sendStreamingRequest(candidateNode, request);
+      const candidateGen = candidateAdapter.sendStreamingRequest(candidateNode, request);
+      // Force the first chunk to validate the connection actually works
+      const firstResult = await candidateGen.next();
+      // Connection validated — store generator and first chunk
+      streamGen = candidateGen;
+      streamFirstChunk = firstResult.done ? null : firstResult.value;
       streamNodeId = candidateId;
       break;
     } catch {
       failedStreamNodes.add(candidateId);
       registry.updateHealth(candidateId, 'unhealthy');
+      rlog.warn('streaming candidate failed, trying next', { nodeId: candidateId });
     }
   }
 
@@ -227,7 +254,78 @@ export async function executePlanStreaming(
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(initialChunk)}\n\n`));
 
       try {
+        // Emit the first chunk that was consumed during validation
+        if (streamFirstChunk) {
+          if (streamFirstChunk.startsWith(TOOL_CALLS_MARKER)) {
+            const deltas = JSON.parse(streamFirstChunk.slice(TOOL_CALLS_MARKER.length)) as Array<{
+              index: number; id?: string; type?: string;
+              function?: { name?: string; arguments?: string };
+            }>;
+            for (const d of deltas) {
+              const existing = toolCallMap.get(d.index);
+              if (existing) {
+                // Merge all fields from the delta
+                if (d.id) existing.id = d.id;
+                if (d.type) existing.type = d.type as 'function';
+                if (d.function?.name) existing.function.name = d.function.name;
+                if (d.function?.arguments) existing.function.arguments += d.function.arguments;
+              } else {
+                toolCallMap.set(d.index, {
+                  id: d.id ?? '',
+                  type: (d.type as 'function') ?? 'function',
+                  function: {
+                    name: d.function?.name ?? '',
+                    arguments: d.function?.arguments ?? '',
+                  },
+                });
+              }
+            }
+          } else if (streamFirstChunk.startsWith(FINISH_REASON_MARKER)) {
+            streamFinishReason = streamFirstChunk.slice(FINISH_REASON_MARKER.length);
+          } else {
+            const chunk: ChatCompletionChunk = {
+              id: chunkId,
+              object: 'chat.completion.chunk',
+              created,
+              model,
+              choices: [{ index: 0, delta: { content: streamFirstChunk }, finish_reason: null }],
+            };
+            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          }
+        }
+
         for await (const text of streamGen) {
+          if (text.startsWith(TOOL_CALLS_MARKER)) {
+            const deltas = JSON.parse(text.slice(TOOL_CALLS_MARKER.length)) as Array<{
+              index: number; id?: string; type?: string;
+              function?: { name?: string; arguments?: string };
+            }>;
+            for (const d of deltas) {
+              const existing = toolCallMap.get(d.index);
+              if (existing) {
+                // Merge all fields from the delta
+                if (d.id) existing.id = d.id;
+                if (d.type) existing.type = d.type as 'function';
+                if (d.function?.name) existing.function.name = d.function.name;
+                if (d.function?.arguments) existing.function.arguments += d.function.arguments;
+              } else {
+                // Start a new tool call
+                toolCallMap.set(d.index, {
+                  id: d.id ?? '',
+                  type: (d.type as 'function') ?? 'function',
+                  function: {
+                    name: d.function?.name ?? '',
+                    arguments: d.function?.arguments ?? '',
+                  },
+                });
+              }
+            }
+            continue;
+          }
+          if (text.startsWith(FINISH_REASON_MARKER)) {
+            streamFinishReason = text.slice(FINISH_REASON_MARKER.length);
+            continue;
+          }
           const chunk: ChatCompletionChunk = {
             id: chunkId,
             object: 'chat.completion.chunk',
@@ -244,7 +342,13 @@ export async function executePlanStreaming(
           object: 'chat.completion.chunk',
           created,
           model,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+          choices: [{
+            index: 0,
+            delta: toolCallMap.size > 0
+              ? { tool_calls: Array.from(toolCallMap.entries()).map(([idx, tc]) => ({ index: idx, ...tc })) }
+              : {},
+            finish_reason: streamFinishReason,
+          }],
         };
         controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
         controller.enqueue(encoder.encode('data: [DONE]\n\n'));
@@ -330,7 +434,32 @@ async function executeStageWithFallback(
     : filtered;
   const sorted = registry.sortByPriority(healthy);
 
-  for (const fallbackNode of sorted) {
+  let finalCandidates = sorted;
+
+  // Apply preferLowerPriority (reverse sort if false)
+  if (profile.preferLowerPriority === false) {
+    finalCandidates = finalCandidates.reverse();
+  }
+
+  // Apply maxLatencyMs filter
+  if (profile.maxLatencyMs != null) {
+    finalCandidates = finalCandidates.filter((n) => {
+      const h = registry.getHealth(n.id);
+      return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
+    });
+  }
+
+  // Apply preferredCapabilities boost
+  if (profile.preferredCapabilities?.length) {
+    const prefs = profile.preferredCapabilities;
+    finalCandidates.sort((a, b) => {
+      const aScore = prefs.filter((c) => a.capabilities.includes(c)).length;
+      const bScore = prefs.filter((c) => b.capabilities.includes(c)).length;
+      return bScore - aScore || a.priority - b.priority;
+    });
+  }
+
+  for (const fallbackNode of finalCandidates) {
     rlog?.info('trying fallback node', { nodeId: fallbackNode.id, capability });
 
     const result = await attemptNode(
@@ -379,8 +508,7 @@ async function attemptNode(
     temperature: options?.temperature,
     maxTokens: options?.maxTokens,
     evidence: compressedEvidence,
-    tools: options?.tools,
-    toolChoice: options?.toolChoice,
+    ...(isLastStage ? { tools: options?.tools, toolChoice: options?.toolChoice } : {}),
   };
 
   if (!isLastStage) {

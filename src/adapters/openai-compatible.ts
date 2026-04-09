@@ -8,6 +8,7 @@ import type {
   HealthStatus,
   ChatMessage,
 } from '../types/index.js';
+import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
 
 /** Build request headers including auth */
 function buildHeaders(node: NodeDefinition): Record<string, string> {
@@ -201,10 +202,16 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
               const jsonStr = trimmed.slice(6);
               try {
                 const chunk = JSON.parse(jsonStr) as {
-                  choices?: { delta?: { content?: string }; finish_reason?: string | null }[];
+                  choices?: { delta?: { content?: string; tool_calls?: any[] }; finish_reason?: string | null }[];
                 };
-                const delta = chunk.choices?.[0]?.delta?.content;
-                if (delta) yield delta;
+                const choice = chunk.choices?.[0];
+                const contentDelta = choice?.delta?.content;
+                if (contentDelta) yield contentDelta;
+                // Yield tool_call deltas as JSON-tagged strings for downstream parsing
+                const toolDelta = choice?.delta?.tool_calls;
+                if (toolDelta) yield `${TOOL_CALLS_MARKER}${JSON.stringify(toolDelta)}`;
+                // Capture finish_reason for tool_calls
+                if (choice?.finish_reason) yield `${FINISH_REASON_MARKER}${choice.finish_reason}`;
               } catch {
                 // Skip malformed JSON chunks
               }
@@ -290,7 +297,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 
       return {
         nodeId: node.id,
-        state: response.ok ? 'healthy' : 'degraded',
+        state: response.ok ? 'healthy' : 'unhealthy',
         lastCheck: Date.now(),
         lastSuccess: response.ok ? Date.now() : undefined,
         consecutiveFailures: response.ok ? 0 : 1,
