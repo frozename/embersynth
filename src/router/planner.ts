@@ -15,15 +15,15 @@ function generatePlanId(): string {
   return `plan-${Date.now()}-${++planCounter}`;
 }
 
-/** Select the best node for a capability given profile constraints */
+/** Select the best node for required capabilities given profile constraints */
 function selectNode(
   registry: NodeRegistry,
-  capability: Capability,
+  capabilities: Capability[],
   profile: RoutingProfile,
   policy: RoutingPolicy,
   excludeNodeIds?: Set<string>,
 ): NodeDefinition | null {
-  let candidates = registry.findByCapabilities([capability]);
+  let candidates = registry.findByCapabilities(capabilities);
 
   // Exclude specific nodes (used during dynamic re-routing)
   if (excludeNodeIds?.size) {
@@ -88,7 +88,7 @@ export function buildPlan(
     const stageCapabilities = effectiveStages[i];
     const primaryCapability = stageCapabilities[0];
 
-    const node = selectNode(registry, primaryCapability, profile, policy, excludeNodeIds);
+    const node = selectNode(registry, stageCapabilities, profile, policy, excludeNodeIds);
 
     if (!node) {
       return {

@@ -35,7 +35,17 @@ function emit(level: LogLevel, msg: string, data?: Record<string, unknown>): voi
     ...data,
   };
 
-  const line = JSON.stringify(entry);
+  let line: string;
+  try {
+    line = JSON.stringify(entry);
+  } catch {
+    line = JSON.stringify({
+      level: entry.level,
+      ts: entry.ts,
+      msg: entry.msg,
+      error: 'unserializable log data',
+    });
+  }
 
   if (level === 'error') {
     console.error(line);
@@ -57,12 +67,12 @@ export const log = {
 export function withRequestId(requestId: string) {
   return {
     debug: (msg: string, data?: Record<string, unknown>) =>
-      emit('debug', msg, { requestId, ...data }),
+      emit('debug', msg, { ...data, requestId }),
     info: (msg: string, data?: Record<string, unknown>) =>
-      emit('info', msg, { requestId, ...data }),
+      emit('info', msg, { ...data, requestId }),
     warn: (msg: string, data?: Record<string, unknown>) =>
-      emit('warn', msg, { requestId, ...data }),
+      emit('warn', msg, { ...data, requestId }),
     error: (msg: string, data?: Record<string, unknown>) =>
-      emit('error', msg, { requestId, ...data }),
+      emit('error', msg, { ...data, requestId }),
   };
 }

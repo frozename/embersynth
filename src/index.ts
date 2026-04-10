@@ -48,10 +48,10 @@ if (watchEnabled && resolvedConfigPath) {
     const healthSnapshot = registry.snapshotHealth();
     try {
       registry.load(newConfig.nodes);
-      Object.assign(config, newConfig);
       const newMonitor = new HealthMonitor(newConfig, registry);
       
-      // Success — swap monitor state
+      // Success — swap monitor and config state together
+      Object.assign(config, newConfig);
       monitor.stop();
       monitor = newMonitor;
       monitor.start();

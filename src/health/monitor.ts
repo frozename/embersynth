@@ -6,6 +6,7 @@ import { getAdapter } from '../adapters/index.js';
 export class HealthMonitor {
   private intervals: ReturnType<typeof setInterval>[] = [];
   private running = false;
+  private inFlight = new Set<string>();
 
   constructor(
     private config: EmberSynthConfig,
@@ -41,12 +42,14 @@ export class HealthMonitor {
   }
 
   async checkNode(nodeId: string): Promise<void> {
+    if (this.inFlight.has(nodeId)) return;
     const node = this.registry.getById(nodeId);
     if (!node || !node.enabled) return;
 
     const adapter = getAdapter(node.providerType);
     if (!adapter) return;
 
+    this.inFlight.add(nodeId);
     try {
       const status = await adapter.checkHealth(node);
       this.registry.updateHealth(
@@ -62,6 +65,8 @@ export class HealthMonitor {
         undefined,
         err instanceof Error ? err.message : String(err),
       );
+    } finally {
+      this.inFlight.delete(nodeId);
     }
   }
 }

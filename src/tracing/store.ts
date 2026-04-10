@@ -13,7 +13,7 @@ export class TraceStore {
   constructor(maxTraces: number = 1000) {
     this.buffer = new Map();
     this.order = [];
-    this.maxTraces = maxTraces;
+    this.maxTraces = Math.max(1, maxTraces);
   }
 
   record(event: TraceEvent): void {

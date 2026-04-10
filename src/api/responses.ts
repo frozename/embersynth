@@ -139,6 +139,18 @@ export async function handleResponses(
                     `event: response.output_text.delta\ndata: ${JSON.stringify({ delta })}\n\n`
                   ));
                 }
+
+                const toolCalls = chunk.choices?.[0]?.delta?.tool_calls;
+                if (toolCalls) {
+                  for (const tc of toolCalls) {
+                    if (tc.function?.arguments) {
+                      // Forward tool call arguments as output_text deltas for simplicity in this proxy path
+                      controller.enqueue(encoder.encode(
+                        `event: response.output_text.delta\ndata: ${JSON.stringify({ delta: tc.function.arguments })}\n\n`
+                      ));
+                    }
+                  }
+                }
               } catch { /* skip malformed chunks */ }
             }
           }
