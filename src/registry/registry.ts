@@ -1,4 +1,10 @@
-import type { NodeDefinition, Capability, HealthStatus, HealthState } from '../types/index.js';
+import type {
+  NodeDefinition,
+  Capability,
+  HealthStatus,
+  HealthState,
+  RoutingProfile,
+} from '../types/index.js';
 
 export class NodeRegistry {
   private nodes: Map<string, NodeDefinition> = new Map();
@@ -26,6 +32,14 @@ export class NodeRegistry {
 
   getAll(): NodeDefinition[] {
     return Array.from(this.nodes.values());
+  }
+
+  snapshotHealth(): Map<string, HealthStatus> {
+    return new Map(this.health);
+  }
+
+  restoreHealth(snapshot: Map<string, HealthStatus>): void {
+    this.health = snapshot;
   }
 
   getEnabled(): NodeDefinition[] {
@@ -88,6 +102,36 @@ export class NodeRegistry {
   /** Sort nodes by priority (lower number = higher priority) */
   sortByPriority(nodes: NodeDefinition[]): NodeDefinition[] {
     return [...nodes].sort((a, b) => a.priority - b.priority);
+  }
+
+  /** Apply profile-based constraints (priority inversion, latency limits, capability boosting) */
+  applyProfileConstraints(nodes: NodeDefinition[], profile: RoutingProfile): NodeDefinition[] {
+    let candidates = [...nodes];
+
+    // Reverse sort when higher priority numbers are preferred
+    if (profile.preferLowerPriority === false) {
+      candidates = candidates.reverse();
+    }
+
+    // Filter out nodes whose last known latency exceeds the limit
+    if (profile.maxLatencyMs != null) {
+      candidates = candidates.filter((n) => {
+        const h = this.getHealth(n.id);
+        return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
+      });
+    }
+
+    // Boost nodes that have preferred capabilities
+    if (profile.preferredCapabilities?.length) {
+      const prefs = profile.preferredCapabilities;
+      candidates.sort((a, b) => {
+        const aScore = prefs.filter((c: Capability) => a.capabilities.includes(c)).length;
+        const bScore = prefs.filter((c: Capability) => b.capabilities.includes(c)).length;
+        return bScore - aScore || a.priority - b.priority;
+      });
+    }
+
+    return candidates;
   }
 
   // ── Health management ──

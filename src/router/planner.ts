@@ -38,28 +38,7 @@ function selectNode(
 
   candidates = registry.sortByPriority(candidates);
 
-  // Reverse sort when higher priority numbers are preferred
-  if (profile.preferLowerPriority === false) {
-    candidates = candidates.reverse();
-  }
-
-  // Filter out nodes whose last known latency exceeds the limit
-  if (profile.maxLatencyMs != null) {
-    candidates = candidates.filter((n) => {
-      const h = registry.getHealth(n.id);
-      return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
-    });
-  }
-
-  // Boost nodes that have preferred capabilities
-  if (profile.preferredCapabilities?.length) {
-    const prefs = profile.preferredCapabilities;
-    candidates.sort((a, b) => {
-      const aScore = prefs.filter((c) => a.capabilities.includes(c)).length;
-      const bScore = prefs.filter((c) => b.capabilities.includes(c)).length;
-      return bScore - aScore || a.priority - b.priority;
-    });
-  }
+  candidates = registry.applyProfileConstraints(candidates, profile);
 
   return candidates[0] ?? null;
 }

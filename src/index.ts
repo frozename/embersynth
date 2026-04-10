@@ -44,16 +44,29 @@ let watcher: ConfigWatcher | null = null;
 const watchEnabled = process.env.EMBERSYNTH_WATCH === 'true' || config.server.watch === true;
 if (watchEnabled && resolvedConfigPath) {
   watcher = new ConfigWatcher(resolvedConfigPath, (newConfig) => {
-    registry.load(newConfig.nodes);
-    monitor.stop();
-    monitor = new HealthMonitor(newConfig, registry);
-    monitor.start();
-    server.stop();
-    server = createServer(newConfig, registry);
-    log.info('config reloaded', {
-      nodes: newConfig.nodes.length,
-      profiles: newConfig.profiles.length,
-    });
+    const oldNodes = [...registry.getAll()];
+    const healthSnapshot = registry.snapshotHealth();
+    try {
+      registry.load(newConfig.nodes);
+      Object.assign(config, newConfig);
+      const newMonitor = new HealthMonitor(newConfig, registry);
+      
+      // Success — swap monitor state
+      monitor.stop();
+      monitor = newMonitor;
+      monitor.start();
+      
+      log.info('config reloaded successfully', {
+        nodes: newConfig.nodes.length,
+        profiles: newConfig.profiles.length,
+      });
+    } catch (err) {
+      registry.load(oldNodes);
+      registry.restoreHealth(healthSnapshot);
+      log.error('config reload failed, keeping current config', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   });
   watcher.start();
 }

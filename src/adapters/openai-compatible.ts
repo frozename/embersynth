@@ -8,22 +8,9 @@ import type {
   HealthStatus,
   ChatMessage,
 } from '../types/index.js';
+import type { ToolCallDelta } from '../types/tools.js';
+import { buildHeaders } from './generic-http.js';
 import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
-
-/** Build request headers including auth */
-function buildHeaders(node: NodeDefinition): Record<string, string> {
-  const headers: Record<string, string> = {
-    'Content-Type': 'application/json',
-  };
-
-  if (node.auth.type === 'bearer' && node.auth.token) {
-    headers['Authorization'] = `Bearer ${node.auth.token}`;
-  } else if (node.auth.type === 'header' && node.auth.headerName && node.auth.headerValue) {
-    headers[node.auth.headerName] = node.auth.headerValue;
-  }
-
-  return headers;
-}
 
 /** Prepare messages with evidence injection */
 function prepareMessages(request: AdapterRequest): ChatMessage[] {
@@ -202,7 +189,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
               const jsonStr = trimmed.slice(6);
               try {
                 const chunk = JSON.parse(jsonStr) as {
-                  choices?: { delta?: { content?: string; tool_calls?: any[] }; finish_reason?: string | null }[];
+                  choices?: { delta?: { content?: string; tool_calls?: ToolCallDelta[] }; finish_reason?: string | null }[];
                 };
                 const choice = chunk.choices?.[0];
                 const contentDelta = choice?.delta?.content;

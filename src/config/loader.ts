@@ -5,6 +5,14 @@ import { CAPABILITIES } from '../types/index.js';
 import type { EmberSynthConfig, NodeDefinition, NodeAuth, RoutingProfile } from '../types/index.js';
 import { log } from '../logger/index.js';
 
+/** Parse a numeric value, using fallback only when the raw value is null/undefined/NaN/empty-string */
+function num(raw: unknown, fallback: number): number {
+  if (raw == null) return fallback;
+  if (typeof raw === 'string' && raw.trim() === '') return fallback;
+  const n = Number(raw);
+  return Number.isNaN(n) ? fallback : n;
+}
+
 const CONFIG_PATHS = [
   './embersynth.yaml',
   './embersynth.yml',
@@ -57,15 +65,15 @@ function normalizeNode(raw: Record<string, unknown>, index: number): NodeDefinit
     auth: normalizeAuth(raw.auth),
     health: {
       endpoint: (raw.health as Record<string, unknown>)?.endpoint as string ?? '/health',
-      intervalMs: Number((raw.health as Record<string, unknown>)?.intervalMs) || 30_000,
-      timeoutMs: Number((raw.health as Record<string, unknown>)?.timeoutMs) || 5_000,
-      unhealthyAfter: Number((raw.health as Record<string, unknown>)?.unhealthyAfter) || 3,
+      intervalMs: num((raw.health as Record<string, unknown>)?.intervalMs, 30_000),
+      timeoutMs: num((raw.health as Record<string, unknown>)?.timeoutMs, 5_000),
+      unhealthyAfter: num((raw.health as Record<string, unknown>)?.unhealthyAfter, 3),
     },
     timeout: {
-      requestMs: Number((raw.timeout as Record<string, unknown>)?.requestMs) || 120_000,
-      connectMs: Number((raw.timeout as Record<string, unknown>)?.connectMs) || 5_000,
+      requestMs: num((raw.timeout as Record<string, unknown>)?.requestMs, 120_000),
+      connectMs: num((raw.timeout as Record<string, unknown>)?.connectMs, 5_000),
     },
-    priority: Number(raw.priority) || 10,
+    priority: num(raw.priority, 10),
     modelId: raw.modelId as string | undefined,
     providerType: (raw.providerType as string) ?? 'openai-compatible',
     optimization: raw.optimization as NodeDefinition['optimization'],
@@ -91,8 +99,14 @@ function normalizeProfile(raw: Record<string, unknown>): RoutingProfile {
 function validateConfig(config: EmberSynthConfig): string[] {
   const warnings: string[] = [];
   const validCapabilities = new Set(CAPABILITIES);
-  
+  const seenIds = new Set<string>();
+
   for (const node of config.nodes) {
+    if (seenIds.has(node.id)) {
+      warnings.push(`Duplicate node ID: "${node.id}" — later definition will be dropped`);
+    }
+    seenIds.add(node.id);
+
     for (const cap of node.capabilities) {
       if (!validCapabilities.has(cap)) {
         warnings.push(`Node "${node.id}": unknown capability "${cap}"`);
@@ -149,7 +163,7 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
   const config: EmberSynthConfig = {
     server: {
       host: envHost ?? (serverRaw.host as string) ?? DEFAULT_CONFIG.server.host,
-      port: envPort ? parseInt(envPort, 10) : Number(serverRaw.port) || DEFAULT_CONFIG.server.port,
+      port: envPort ? num(parseInt(envPort, 10), DEFAULT_CONFIG.server.port) : num(serverRaw.port, DEFAULT_CONFIG.server.port),
     },
     nodes: rawConfig?.nodes
       ? (rawConfig.nodes as Record<string, unknown>[]).map(normalizeNode)
@@ -172,6 +186,14 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
     log.warn('config validation', { warning: w });
   }
 
+  // Deduplicate nodes — keep first occurrence of each ID
+  const seenNodeIds = new Set<string>();
+  config.nodes = config.nodes.filter((node) => {
+    if (seenNodeIds.has(node.id)) return false;
+    seenNodeIds.add(node.id);
+    return true;
+  });
+
   return config;
 }
 
@@ -183,3 +205,4 @@ export function resolveProfileFromModel(
   if (!profileId) return null;
   return config.profiles.find((p) => p.id === profileId) ?? null;
 }
+

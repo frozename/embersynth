@@ -3,13 +3,19 @@ export const FINISH_REASON_MARKER = '\0finish_reason:' as const;
 
 export type ToolCallMap = Map<number, { id: string; type: 'function'; function: { name: string; arguments: string } }>;
 
+/**
+ * Parses and merges tool-call deltas into the provided map.
+ * This deduplicates the merging logic used across streaming paths.
+ */
 export function mergeToolCallDeltas(map: ToolCallMap, rawDelta: string): void {
   const jsonStr = rawDelta.startsWith(TOOL_CALLS_MARKER)
     ? rawDelta.slice(TOOL_CALLS_MARKER.length)
     : rawDelta;
 
   const deltas = JSON.parse(jsonStr) as Array<{
-    index: number; id?: string; type?: string;
+    index: number;
+    id?: string;
+    type?: string;
     function?: { name?: string; arguments?: string };
   }>;
 
@@ -32,4 +38,3 @@ export function mergeToolCallDeltas(map: ToolCallMap, rawDelta: string): void {
     }
   }
 }
-

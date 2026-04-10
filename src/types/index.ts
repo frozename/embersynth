@@ -286,6 +286,7 @@ export interface ChatCompletionChunk {
     delta: {
       role?: 'assistant';
       content?: string;
+      tool_calls?: import('./tools.js').ToolCallDelta[];
     };
     finish_reason: string | null;
   }[];

@@ -17,3 +17,14 @@ export interface ToolResult {
   toolCallId: string;
   content: string;
 }
+
+/** Partial tool_call delta as received during streaming */
+export interface ToolCallDelta {
+  index: number;
+  id?: string;
+  type?: 'function';
+  function?: {
+    name?: string;
+    arguments?: string;
+  };
+}

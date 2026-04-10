@@ -8,6 +8,7 @@ import type {
   StreamingOrchestrationResult,
   ChatMessage,
   ChatCompletionChunk,
+  ChatCompletionRequest,
   RoutingPolicy,
   RoutingProfile,
   Capability,
@@ -25,7 +26,12 @@ export async function executePlan(
   registry: NodeRegistry,
   policy: RoutingPolicy,
   profile: RoutingProfile,
-  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
+  options?: {
+    temperature?: number;
+    maxTokens?: number;
+    tools?: ChatCompletionRequest['tools'];
+    toolChoice?: ChatCompletionRequest['tool_choice'];
+  },
 ): Promise<OrchestrationResult> {
   const rlog = withRequestId(plan.id);
   const evidence: EvidenceBundle = {
@@ -98,7 +104,12 @@ export async function executePlanStreaming(
   policy: RoutingPolicy,
   profile: RoutingProfile,
   model: string,
-  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
+  options?: {
+    temperature?: number;
+    maxTokens?: number;
+    tools?: ChatCompletionRequest['tools'];
+    toolChoice?: ChatCompletionRequest['tool_choice'];
+  },
 ): Promise<StreamingOrchestrationResult> {
   const rlog = withRequestId(plan.id);
   const evidence: EvidenceBundle = {
@@ -169,24 +180,7 @@ export async function executePlanStreaming(
     : tagFiltered;
   const sorted = registry.sortByPriority(healthFiltered);
 
-  let profileFiltered = sorted;
-  if (profile.preferLowerPriority === false) {
-    profileFiltered = profileFiltered.reverse();
-  }
-  if (profile.maxLatencyMs != null) {
-    profileFiltered = profileFiltered.filter((n) => {
-      const h = registry.getHealth(n.id);
-      return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
-    });
-  }
-  if (profile.preferredCapabilities?.length) {
-    const prefs = profile.preferredCapabilities;
-    profileFiltered.sort((a, b) => {
-      const aScore = prefs.filter((c) => a.capabilities.includes(c)).length;
-      const bScore = prefs.filter((c) => b.capabilities.includes(c)).length;
-      return bScore - aScore || a.priority - b.priority;
-    });
-  }
+  const profileFiltered = registry.applyProfileConstraints(sorted, profile);
   const candidates = [finalStage.nodeId, ...profileFiltered.map((n) => n.id)];
 
   for (const candidateId of candidates) {
@@ -350,7 +344,12 @@ async function executeStageWithFallback(
   policy: RoutingPolicy,
   profile: RoutingProfile,
   failedNodeIds: Set<string>,
-  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
+  options?: {
+    temperature?: number;
+    maxTokens?: number;
+    tools?: ChatCompletionRequest['tools'];
+    toolChoice?: ChatCompletionRequest['tool_choice'];
+  },
   rlog?: Log,
 ): Promise<StageResult | null> {
   // Try the primary node first
@@ -389,30 +388,7 @@ async function executeStageWithFallback(
     : filtered;
   const sorted = registry.sortByPriority(healthy);
 
-  let finalCandidates = sorted;
-
-  // Apply preferLowerPriority (reverse sort if false)
-  if (profile.preferLowerPriority === false) {
-    finalCandidates = finalCandidates.reverse();
-  }
-
-  // Apply maxLatencyMs filter
-  if (profile.maxLatencyMs != null) {
-    finalCandidates = finalCandidates.filter((n) => {
-      const h = registry.getHealth(n.id);
-      return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
-    });
-  }
-
-  // Apply preferredCapabilities boost
-  if (profile.preferredCapabilities?.length) {
-    const prefs = profile.preferredCapabilities;
-    finalCandidates.sort((a, b) => {
-      const aScore = prefs.filter((c) => a.capabilities.includes(c)).length;
-      const bScore = prefs.filter((c) => b.capabilities.includes(c)).length;
-      return bScore - aScore || a.priority - b.priority;
-    });
-  }
+  const finalCandidates = registry.applyProfileConstraints(sorted, profile);
 
   for (const fallbackNode of finalCandidates) {
     rlog?.info('trying fallback node', { nodeId: fallbackNode.id, capability });
@@ -446,7 +422,12 @@ async function attemptNode(
   isLastStage: boolean,
   registry: NodeRegistry,
   policy: RoutingPolicy,
-  options?: { temperature?: number; maxTokens?: number; tools?: any[]; toolChoice?: any },
+  options?: {
+    temperature?: number;
+    maxTokens?: number;
+    tools?: ChatCompletionRequest['tools'];
+    toolChoice?: ChatCompletionRequest['tool_choice'];
+  },
   rlog?: Log,
 ): Promise<StageResult | null> {
   const node = registry.getById(nodeId);
@@ -547,4 +528,3 @@ function buildIntermediatePrompt(capability: string): string {
       return `You are a ${capability} stage in a multi-step pipeline. Produce structured output for the next stage.`;
   }
 }
-

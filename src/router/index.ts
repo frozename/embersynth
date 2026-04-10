@@ -72,12 +72,13 @@ export async function route(
 
   const planResult = buildPlan(classification, profile, config.policy, registry);
   if (!planResult.ok) {
+    const status = planResult.error.type === 'capability-gap' ? 422 : 503;
     return {
       ok: false,
       error: {
-        status: 503,
+        status,
         message: planResult.error.message,
-        detail: `No available node for capability "${planResult.error.capability}" under profile "${profile.id}"`,
+        detail: planResult.error.message,
       },
     };
   }
@@ -164,12 +165,13 @@ export async function routeStreaming(
   const planResult = buildPlan(classification, profile, config.policy, registry);
 
   if (!planResult.ok) {
+    const status = planResult.error.type === 'capability-gap' ? 422 : 503;
     return {
       ok: false,
       error: {
-        status: 503,
+        status,
         message: planResult.error.message,
-        detail: `No available node for capability "${planResult.error.capability}" under profile "${profile.id}"`,
+        detail: planResult.error.message,
       },
     };
   }
@@ -186,48 +188,28 @@ export async function routeStreaming(
   const finalAdapter = finalNode ? getAdapter(finalNode.providerType) : undefined;
 
   if (!finalAdapter?.sendStreamingRequest) {
-    // Fall back to non-streaming execution
-    log.info('streaming not supported by final node adapter, falling back to non-streaming', {
-      nodeId: finalStage.nodeId,
-    });
-    // Ensure no traceCtx is passed to route() on fallback to prevent duplicate events
-    const result = await route(request, config, registry);
-    if (!result.ok) return result;
+    // Check if any other node with this capability supports streaming
+    let alternates = registry.findByCapabilities([finalStage.capability])
+      .filter((n) => n.id !== finalStage.nodeId);
+    alternates = registry.filterByTags(alternates, profile.requiredTags, profile.excludedTags);
+    if (config.policy.requireHealthy) {
+      alternates = registry.filterByHealth(alternates, profile.allowDegradedNodes);
+    }
+    alternates = registry.sortByPriority(alternates);
+    alternates = registry.applyProfileConstraints(alternates, profile);
 
-    // Convert non-streaming result to a single-chunk stream
-    const encoder = new TextEncoder();
-    const content = result.result.response.content;
-    const chunkId = `chatcmpl-${Date.now()}`;
-    const created = Math.floor(Date.now() / 1000);
-
-    const stream = new ReadableStream<Uint8Array>({
-      start(controller) {
-        const roleChunk = {
-          id: chunkId, object: 'chat.completion.chunk', created, model: request.model,
-          choices: [{ index: 0, delta: { role: 'assistant' as const }, finish_reason: null }],
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
-
-        const contentChunk = {
-          id: chunkId, object: 'chat.completion.chunk', created, model: request.model,
-          choices: [{ index: 0, delta: { content }, finish_reason: null }],
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(contentChunk)}\n\n`));
-
-        const doneChunk = {
-          id: chunkId, object: 'chat.completion.chunk', created, model: request.model,
-          choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
-        };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
-      },
+    const hasStreamingAlternate = alternates.some((n) => {
+      const a = getAdapter(n.providerType);
+      return !!a?.sendStreamingRequest;
     });
 
-    return {
-      ok: true,
-      result: { stream, plan: result.result.plan, evidence: result.result.evidence },
-    };
+    if (!hasStreamingAlternate) {
+      // No streaming-capable nodes at all — fall back to non-streaming
+      log.info('no streaming-capable nodes available, falling back to non-streaming', {
+        nodeId: finalStage.nodeId,
+      });
+      return fallbackToNonStreamingSSE(request, config, registry);
+    }
   }
 
   try {
@@ -242,6 +224,8 @@ export async function routeStreaming(
       {
         temperature: request.temperature,
         maxTokens: request.max_tokens,
+        tools: request.tools,
+        toolChoice: request.tool_choice,
       },
     );
 
@@ -253,18 +237,87 @@ export async function routeStreaming(
     return { ok: true, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.error('streaming execution failed', {
+    log.error('streaming execution failed, trying non-streaming fallback', {
       error: message,
     });
     traceCtx?.record('error', { message });
-    return {
-      ok: false,
-      error: {
-        status: 502,
-        message: err instanceof Error ? err.message : 'Streaming execution failed',
-      },
-    };
+    
+    try {
+      return await fallbackToNonStreamingSSE(request, config, registry);
+    } catch (fallbackErr) {
+      return {
+        ok: false,
+        error: {
+          status: 502,
+          message: fallbackErr instanceof Error ? fallbackErr.message : 'Streaming fallback failed',
+        },
+      };
+    }
   }
+}
+
+/** 
+ * Fall back to non-streaming route() and convert the result into a 
+ * single-chunk ReadableStream for SSE compatibility.
+ */
+async function fallbackToNonStreamingSSE(
+  request: ChatCompletionRequest,
+  config: EmberSynthConfig,
+  registry: NodeRegistry,
+): Promise<StreamingRouterResult> {
+  const result = await route(request, config, registry);
+  if (!result.ok) return result;
+
+  const encoder = new TextEncoder();
+  const content = result.result.response.content;
+  const toolCalls = result.result.response.toolCalls;
+  const chunkId = `chatcmpl-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+
+  const stream = new ReadableStream<Uint8Array>({
+    start(controller) {
+      const roleChunk = {
+        id: chunkId,
+        object: 'chat.completion.chunk',
+        created,
+        model: request.model,
+        choices: [{ index: 0, delta: { role: 'assistant' as const }, finish_reason: null }],
+      };
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
+
+      const toolCallDeltas = toolCalls?.map((tc, i) => ({ index: i, ...tc }));
+      const contentChunk = {
+        id: chunkId,
+        object: 'chat.completion.chunk',
+        created,
+        model: request.model,
+        choices: [
+          {
+            index: 0,
+            delta: { content, ...(toolCallDeltas ? { tool_calls: toolCallDeltas } : {}) },
+            finish_reason: null,
+          },
+        ],
+      };
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(contentChunk)}\n\n`));
+
+      const doneChunk = {
+        id: chunkId,
+        object: 'chat.completion.chunk',
+        created,
+        model: request.model,
+        choices: [{ index: 0, delta: {}, finish_reason: toolCalls ? 'tool_calls' : 'stop' }],
+      };
+      controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
+      controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+      controller.close();
+    },
+  });
+
+  return {
+    ok: true,
+    result: { stream, plan: result.result.plan, evidence: result.result.evidence },
+  };
 }
 
 /** Route an embedding request to an embedding-capable node */
@@ -294,6 +347,9 @@ export async function routeEmbedding(
 
   candidates = registry.sortByPriority(candidates);
 
+  // Apply full profile constraints
+  candidates = registry.applyProfileConstraints(candidates, profile);
+
   if (candidates.length === 0) {
     return {
       ok: false,
@@ -304,38 +360,42 @@ export async function routeEmbedding(
     };
   }
 
-  const node = candidates[0];
-  const adapter = getAdapter(node.providerType);
+  const input = Array.isArray(request.input) ? request.input : [request.input];
+  let lastError: string | undefined;
+  let hasAdapterSupport = false;
 
-  if (!adapter?.sendEmbeddingRequest) {
+  // Try candidates with fallback
+  for (const node of candidates) {
+    const adapter = getAdapter(node.providerType);
+    if (!adapter?.sendEmbeddingRequest) continue;
+    hasAdapterSupport = true;
+
+    try {
+      const result = await adapter.sendEmbeddingRequest(node, { input, model: node.modelId });
+      registry.updateHealth(node.id, 'healthy');
+      return { ok: true, result, model: request.model, nodeId: node.id };
+    } catch (err) {
+      lastError = err instanceof Error ? err.message : String(err);
+      registry.updateHealth(node.id, 'unhealthy', undefined, lastError);
+      // Continue to next candidate
+    }
+  }
+
+  if (!hasAdapterSupport) {
     return {
       ok: false,
       error: {
         status: 501,
-        message: `Adapter "${node.providerType}" does not support embeddings`,
+        message: 'No nodes available with embedding adapter support',
       },
     };
   }
 
-  const input = Array.isArray(request.input) ? request.input : [request.input];
-
-  try {
-    const result = await adapter.sendEmbeddingRequest(node, { input, model: node.modelId });
-    registry.updateHealth(node.id, 'healthy');
-    return { ok: true, result, model: request.model, nodeId: node.id };
-  } catch (err) {
-    registry.updateHealth(
-      node.id,
-      'unhealthy',
-      undefined,
-      err instanceof Error ? err.message : String(err),
-    );
-    return {
-      ok: false,
-      error: {
-        status: 502,
-        message: err instanceof Error ? err.message : 'Embedding request failed',
-      },
-    };
-  }
+  return {
+    ok: false,
+    error: {
+      status: 502,
+      message: `All embedding nodes failed. Last error: ${lastError}`,
+    },
+  };
 }

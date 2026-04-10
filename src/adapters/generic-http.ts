@@ -52,6 +52,9 @@ export class GenericHttpAdapter implements ProviderAdapter {
             content: i.content,
           }))
         : undefined,
+      system_prompt: request.systemPromptOverride ?? undefined,
+      tools: request.tools ?? undefined,
+      tool_choice: request.toolChoice ?? undefined,
     };
 
     const headers = buildHeaders(node);
@@ -74,11 +77,13 @@ export class GenericHttpAdapter implements ProviderAdapter {
       const data = (await response.json()) as {
         content?: string;
         finish_reason?: string;
+        tool_calls?: Array<{ id: string; type: 'function'; function: { name: string; arguments: string } }>;
       };
 
       return {
         content: data.content ?? '',
         finishReason: data.finish_reason ?? 'stop',
+        toolCalls: data.tool_calls?.length ? data.tool_calls : undefined,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -103,7 +108,7 @@ export class GenericHttpAdapter implements ProviderAdapter {
 
       return {
         nodeId: node.id,
-        state: response.ok ? 'healthy' : 'degraded',
+        state: response.ok ? 'healthy' : 'unhealthy',
         lastCheck: Date.now(),
         lastSuccess: response.ok ? Date.now() : undefined,
         consecutiveFailures: response.ok ? 0 : 1,

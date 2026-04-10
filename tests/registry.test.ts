@@ -193,4 +193,56 @@ describe('NodeRegistry', () => {
     expect(h.consecutiveFailures).toBe(0);
     expect(h.latencyMs).toBe(25);
   });
+
+  describe('applyProfileConstraints', () => {
+    test('reverses priority when preferLowerPriority is false', () => {
+      const nodes = [
+        makeNode({ id: 'high', priority: 1 }),
+        makeNode({ id: 'mid', priority: 10 }),
+        makeNode({ id: 'low', priority: 50 }),
+      ];
+
+      const result = registry.applyProfileConstraints(nodes, { id: 'test', label: 'test', preferLowerPriority: false });
+      expect(result[0].id).toBe('low');
+      expect(result[1].id).toBe('mid');
+      expect(result[2].id).toBe('high');
+    });
+
+    test('filters out nodes exceeding maxLatencyMs', () => {
+      const nodes = [
+        makeNode({ id: 'fast', priority: 1 }),
+        makeNode({ id: 'slow', priority: 2 }),
+      ];
+      registry.load(nodes);
+      registry.updateHealth('fast', 'healthy', 50);
+      registry.updateHealth('slow', 'healthy', 200);
+
+      const result = registry.applyProfileConstraints(nodes, { id: 'test', label: 'test', maxLatencyMs: 100 });
+      expect(result.length).toBe(1);
+      expect(result[0].id).toBe('fast');
+    });
+
+    test('keeps nodes with no latency data when maxLatencyMs is set', () => {
+      const nodes = [
+        makeNode({ id: 'unknown', priority: 1 }),
+      ];
+      registry.load(nodes);
+
+      const result = registry.applyProfileConstraints(nodes, { id: 'test', label: 'test', maxLatencyMs: 100 });
+      expect(result.length).toBe(1);
+      expect(result[0].id).toBe('unknown');
+    });
+
+    test('boosts nodes matching preferredCapabilities', () => {
+      const nodes = [
+        makeNode({ id: 'fallback', capabilities: ['reasoning'], priority: 1 }),
+        makeNode({ id: 'preferred', capabilities: ['reasoning', 'vision'], priority: 10 }),
+      ];
+
+      const result = registry.applyProfileConstraints(nodes, { id: 'test', label: 'test', preferredCapabilities: ['vision'] });
+      // 'preferred' should jump ahead of 'fallback' despite having worse priority
+      expect(result[0].id).toBe('preferred');
+      expect(result[1].id).toBe('fallback');
+    });
+  });
 });
