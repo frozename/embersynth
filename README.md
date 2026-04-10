@@ -13,7 +13,7 @@ EmberSynth sits between your clients and your local AI services. Clients call on
 5. **Compresses** evidence when configured to reduce token usage
 6. **Synthesizes** a final unified response (streamed or buffered)
 
-```
+```text
 Client ──► EmberSynth ──► Memory Node ──► Retrieval Node ──► Vision Node ──► Reasoning Node
                 │                                                                │
                 │         ◄── evidence (compressed) ────────────────────────────┘
@@ -23,7 +23,7 @@ Client ──► EmberSynth ──► Memory Node ──► Retrieval Node ─�
 
 ## Architecture
 
-```
+```text
 src/
 ├── api/            # HTTP server, route handlers (completions, embeddings, responses, metrics)
 ├── adapters/       # Provider adapters (OpenAI-compatible, generic HTTP)
@@ -50,7 +50,7 @@ src/
 
 ### Request flow
 
-```
+```text
 Request → Classifier → Planner → Executor → Response
               │            │          │
               │            │          ├── Stage 1 (e.g. memory recall)
@@ -268,6 +268,7 @@ policy:
 
 ```yaml
 syntheticModels:
+
   fusion-auto: auto
   fusion-fast: fast
   fusion-private: private

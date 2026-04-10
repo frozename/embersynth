@@ -322,6 +322,8 @@ export interface ResponsesRequest {
   instructions?: string;
   temperature?: number;
   max_output_tokens?: number;
+  tools?: ChatCompletionRequest['tools'];
+  tool_choice?: ChatCompletionRequest['tool_choice'];
   stream?: boolean;
 }
 

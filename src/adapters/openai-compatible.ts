@@ -208,6 +208,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       } finally {
         reader.releaseLock();
       }
+
+      if (buffer.trim()) {
+        const trimmed = buffer.trim();
+        if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
+          try {
+            const chunk = JSON.parse(trimmed.slice(6));
+            const choice = chunk.choices?.[0];
+            if (choice?.delta?.content) yield choice.delta.content;
+            if (choice?.delta?.tool_calls) yield `${TOOL_CALLS_MARKER}${JSON.stringify(choice.delta.tool_calls)}`;
+            if (choice?.finish_reason) yield `${FINISH_REASON_MARKER}${choice.finish_reason}`;
+          } catch { /* skip malformed */ }
+        }
+      }
     } finally {
       clearTimeout(timeoutId);
     }
@@ -266,20 +279,19 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     const url = `${node.endpoint}${healthEndpoint}`;
     const start = Date.now();
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(
-        () => controller.abort(),
-        node.health.timeoutMs ?? 5_000,
-      );
+    const controller = new AbortController();
+    const timeoutId = setTimeout(
+      () => controller.abort(),
+      node.health.timeoutMs ?? 5_000,
+    );
 
+    try {
       const response = await fetch(url, {
         method: 'GET',
         headers: buildHeaders(node),
         signal: controller.signal,
       });
 
-      clearTimeout(timeoutId);
       const latencyMs = Date.now() - start;
 
       return {
@@ -298,6 +310,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         consecutiveFailures: 1,
         error: err instanceof Error ? err.message : String(err),
       };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 }

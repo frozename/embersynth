@@ -1,11 +1,13 @@
 import type { EmbeddingRequest, EmbeddingResponse, EmberSynthConfig } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
+import type { TraceContext } from '../tracing/context.js';
 import { routeEmbedding } from '../router/index.js';
 
 export async function handleEmbeddings(
   req: Request,
   config: EmberSynthConfig,
   registry: NodeRegistry,
+  traceCtx?: TraceContext,
 ): Promise<Response> {
   let body: EmbeddingRequest;
 
@@ -32,7 +34,10 @@ export async function handleEmbeddings(
     );
   }
 
-  const result = await routeEmbedding(body, config, registry);
+  const inputs = Array.isArray(body.input) ? body.input : [body.input];
+  traceCtx?.record('classify', { model: body.model, inputs: inputs.length });
+
+  const result = await routeEmbedding(body, config, registry, traceCtx);
 
   if (!result.ok) {
     return Response.json(

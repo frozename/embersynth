@@ -244,5 +244,22 @@ describe('NodeRegistry', () => {
       expect(result[0].id).toBe('preferred');
       expect(result[1].id).toBe('fallback');
     });
+
+    test('respects preferLowerPriority in preferredCapabilities tie-break', () => {
+      const nodes = [
+        makeNode({ id: 'low-prio-pref', capabilities: ['vision'], priority: 50 }),
+        makeNode({ id: 'high-prio-pref', capabilities: ['vision'], priority: 1 }),
+      ];
+
+      // With preferLowerPriority: false, higher priority number (50) should win tie-break
+      const result = registry.applyProfileConstraints(nodes, {
+        id: 'test',
+        label: 'test',
+        preferredCapabilities: ['vision'],
+        preferLowerPriority: false,
+      });
+      expect(result[0].id).toBe('low-prio-pref');
+      expect(result[1].id).toBe('high-prio-pref');
+    });
   });
 });

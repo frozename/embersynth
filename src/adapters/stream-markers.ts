@@ -12,12 +12,18 @@ export function mergeToolCallDeltas(map: ToolCallMap, rawDelta: string): void {
     ? rawDelta.slice(TOOL_CALLS_MARKER.length)
     : rawDelta;
 
-  const deltas = JSON.parse(jsonStr) as Array<{
+  let deltas: Array<{
     index: number;
     id?: string;
     type?: string;
     function?: { name?: string; arguments?: string };
   }>;
+
+  try {
+    deltas = JSON.parse(jsonStr);
+  } catch {
+    return;
+  }
 
   for (const d of deltas) {
     const existing = map.get(d.index);

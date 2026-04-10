@@ -94,17 +94,15 @@ export class GenericHttpAdapter implements ProviderAdapter {
     const url = `${node.endpoint}${node.health.endpoint ?? '/health'}`;
     const start = Date.now();
 
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), node.health.timeoutMs ?? 5_000);
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), node.health.timeoutMs ?? 5_000);
 
+    try {
       const response = await fetch(url, {
         method: 'GET',
         headers: buildHeaders(node),
         signal: controller.signal,
       });
-
-      clearTimeout(timeoutId);
 
       return {
         nodeId: node.id,
@@ -122,6 +120,8 @@ export class GenericHttpAdapter implements ProviderAdapter {
         consecutiveFailures: 1,
         error: err instanceof Error ? err.message : String(err),
       };
+    } finally {
+      clearTimeout(timeoutId);
     }
   }
 }

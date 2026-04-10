@@ -80,6 +80,8 @@ export async function handleResponses(
       messages,
       temperature: body.temperature,
       max_tokens: body.max_output_tokens,
+      tools: body.tools,
+      tool_choice: body.tool_choice,
       stream: true,
     };
 
@@ -175,6 +177,8 @@ export async function handleResponses(
     messages,
     temperature: body.temperature,
     max_tokens: body.max_output_tokens,
+    tools: body.tools,
+    tool_choice: body.tool_choice,
     stream: false,
   };
 

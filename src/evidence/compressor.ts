@@ -42,7 +42,7 @@ function extractKeySentences(content: string, maxLength: number): string {
     totalLength += sentence.length + 1;
   }
 
-  return result.join(' ');
+  return result.length > 0 ? result.join(' ') : truncateContent(content, maxLength);
 }
 
 /** Compress an evidence bundle to reduce token usage in synthesis */

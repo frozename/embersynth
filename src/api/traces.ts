@@ -2,9 +2,12 @@ import type { TraceStore } from '../tracing/store.js';
 
 export function handleListTraces(store: TraceStore, url: URL): Response {
   const limitParam = url.searchParams.get('limit');
-  const limit = limitParam ? parseInt(limitParam, 10) : 50;
+  const DEFAULT_LIMIT = 50;
+  const MAX_LIMIT = 500;
+  const parsed = limitParam ? parseInt(limitParam, 10) : DEFAULT_LIMIT;
+  const limit = Number.isFinite(parsed) && parsed > 0 ? Math.min(parsed, MAX_LIMIT) : DEFAULT_LIMIT;
 
-  const traces = store.listTraces(Number.isFinite(limit) && limit > 0 ? limit : 50);
+  const traces = store.listTraces(limit);
   return Response.json({ traces });
 }
 

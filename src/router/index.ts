@@ -325,6 +325,7 @@ export async function routeEmbedding(
   request: EmbeddingRequest,
   config: EmberSynthConfig,
   registry: NodeRegistry,
+  traceCtx?: TraceContext,
 ): Promise<EmbeddingRouterResult> {
   const profile = resolveProfileFromModel(request.model, config);
   if (!profile) {
@@ -360,6 +361,8 @@ export async function routeEmbedding(
     };
   }
 
+  traceCtx?.record('plan', { capability: 'embedding', candidates: candidates.map((n) => n.id) });
+
   const input = Array.isArray(request.input) ? request.input : [request.input];
   let lastError: string | undefined;
   let hasAdapterSupport = false;
@@ -373,10 +376,12 @@ export async function routeEmbedding(
     try {
       const result = await adapter.sendEmbeddingRequest(node, { input, model: node.modelId });
       registry.updateHealth(node.id, 'healthy');
+      traceCtx?.record('execute-complete', { nodeId: node.id });
       return { ok: true, result, model: request.model, nodeId: node.id };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
       registry.updateHealth(node.id, 'unhealthy', undefined, lastError);
+      traceCtx?.record('error', { nodeId: node.id, message: lastError });
       // Continue to next candidate
     }
   }
@@ -391,11 +396,14 @@ export async function routeEmbedding(
     };
   }
 
+  const finalError = `All embedding nodes failed. Last error: ${lastError}`;
+  traceCtx?.record('error', { message: finalError });
+
   return {
     ok: false,
     error: {
       status: 502,
-      message: `All embedding nodes failed. Last error: ${lastError}`,
+      message: finalError,
     },
   };
 }

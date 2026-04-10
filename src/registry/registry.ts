@@ -108,27 +108,27 @@ export class NodeRegistry {
   applyProfileConstraints(nodes: NodeDefinition[], profile: RoutingProfile): NodeDefinition[] {
     let candidates = [...nodes];
 
-    // Reverse sort when higher priority numbers are preferred
-    if (profile.preferLowerPriority === false) {
-      candidates = candidates.reverse();
-    }
-
     // Filter out nodes whose last known latency exceeds the limit
     if (profile.maxLatencyMs != null) {
       candidates = candidates.filter((n) => {
         const h = this.getHealth(n.id);
-        return !h?.latencyMs || h.latencyMs <= profile.maxLatencyMs!;
+        return h?.latencyMs == null || h.latencyMs <= profile.maxLatencyMs!;
       });
     }
 
-    // Boost nodes that have preferred capabilities
+    // Sort by preferred capabilities (if any), with priority as tie-break
+    // When preferLowerPriority is false, higher priority numbers win
+    const priorityDir = profile.preferLowerPriority === false ? -1 : 1;
+
     if (profile.preferredCapabilities?.length) {
       const prefs = profile.preferredCapabilities;
       candidates.sort((a, b) => {
         const aScore = prefs.filter((c: Capability) => a.capabilities.includes(c)).length;
         const bScore = prefs.filter((c: Capability) => b.capabilities.includes(c)).length;
-        return bScore - aScore || a.priority - b.priority;
+        return (bScore - aScore) || (priorityDir * (a.priority - b.priority));
       });
+    } else if (profile.preferLowerPriority === false) {
+      candidates.reverse();
     }
 
     return candidates;

@@ -46,7 +46,7 @@ export function createServer(config: EmberSynthConfig, registry: NodeRegistry) {
         } else if (method === 'POST' && path === '/v1/chat/completions') {
           response = await handleCompletions(req, config, registry, traceCtx);
         } else if (method === 'POST' && path === '/v1/embeddings') {
-          response = await handleEmbeddings(req, config, registry);
+          response = await handleEmbeddings(req, config, registry, traceCtx);
         } else if (method === 'POST' && path === '/v1/responses') {
           response = await handleResponses(req, config, registry, traceCtx);
         } else if (method === 'GET' && path === '/v1/traces') {
