@@ -1,3 +1,4 @@
+import pkg from '../../package.json';
 import type { EmberSynthConfig } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 import { handleModels } from './models.js';
@@ -60,7 +61,7 @@ export function createServer(config: EmberSynthConfig, registry: NodeRegistry) {
           response = Response.json({
             status: 'ok',
             service: 'embersynth',
-            version: '0.2.0',
+            version: pkg.version,
             nodes: {
               total: registry.getAll().length,
               enabled: registry.getEnabled().length,

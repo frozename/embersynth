@@ -1,4 +1,4 @@
-import { describe, test, expect, afterAll } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
 import { createTestHarness, createTestHarnessWithTags } from './mock-server.js';
 import type { TestHarness } from './mock-server.js';
 
@@ -6,7 +6,7 @@ import type { TestHarness } from './mock-server.js';
 
 let harness: TestHarness;
 
-afterAll(() => {
+afterEach(() => {
   harness?.stop();
 });
 
@@ -98,7 +98,7 @@ describe('completions integration', () => {
 
     const body = (await res.json()) as Record<string, any>;
     expect(body.error).toBeDefined();
-    expect(body.error.message).toContain('No healthy node available');
+    expect(body.error.message).toContain('No healthy node for capabilities');
 
     // The mock node should NOT have received any completion requests
     const mockNode = harness.mockNodes[0];

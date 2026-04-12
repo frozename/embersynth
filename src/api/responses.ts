@@ -117,6 +117,7 @@ export async function handleResponses(
         const decoder = new TextDecoder();
         let fullContent = '';
         let sseBuffer = '';
+        const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
 
         try {
           while (true) {
@@ -132,7 +133,8 @@ export async function handleResponses(
               if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
               try {
                 const chunk = JSON.parse(trimmed.slice(6));
-                const delta = chunk.choices?.[0]?.delta?.content;
+                const choice = chunk.choices?.[0];
+                const delta = choice?.delta?.content;
                 if (delta) {
                   fullContent += delta;
                   controller.enqueue(encoder.encode(
@@ -140,14 +142,31 @@ export async function handleResponses(
                   ));
                 }
 
-                const toolCalls = chunk.choices?.[0]?.delta?.tool_calls;
+                const toolCalls = choice?.delta?.tool_calls;
                 if (toolCalls) {
                   for (const tc of toolCalls) {
-                    if (tc.function?.arguments) {
-                      // Forward tool call arguments as output_text deltas for simplicity in this proxy path
+                    if (!toolCallMap.has(tc.index) && tc.id && tc.function?.name) {
+                      toolCallMap.set(tc.index, { id: tc.id, name: tc.function.name, arguments: '' });
                       controller.enqueue(encoder.encode(
-                        `event: response.output_text.delta\ndata: ${JSON.stringify({ delta: tc.function.arguments })}\n\n`
+                        `event: response.output_item.added\ndata: ${JSON.stringify({
+                          type: 'function_call',
+                          id: tc.id,
+                          call_id: tc.id,
+                          name: tc.function.name,
+                        })}\n\n`
                       ));
+                    }
+                    if (tc.function?.arguments) {
+                      const entry = toolCallMap.get(tc.index);
+                      if (entry) {
+                        entry.arguments += tc.function.arguments;
+                        controller.enqueue(encoder.encode(
+                          `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({
+                            call_id: entry.id,
+                            delta: tc.function.arguments,
+                          })}\n\n`
+                        ));
+                      }
                     }
                   }
                 }
@@ -156,6 +175,24 @@ export async function handleResponses(
           }
 
           // Send completion events
+          for (const [, tc] of toolCallMap) {
+            controller.enqueue(encoder.encode(
+              `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
+                call_id: tc.id,
+                arguments: tc.arguments,
+              })}\n\n`
+            ));
+            controller.enqueue(encoder.encode(
+              `event: response.output_item.done\ndata: ${JSON.stringify({
+                type: 'function_call',
+                id: tc.id,
+                call_id: tc.id,
+                name: tc.name,
+                arguments: tc.arguments,
+              })}\n\n`
+            ));
+          }
+
           controller.enqueue(encoder.encode(
             `event: response.output_text.done\ndata: ${JSON.stringify({ text: fullContent })}\n\n`
           ));
@@ -203,11 +240,32 @@ export async function handleResponses(
     );
   }
 
+  const content = result.result.response.content;
+  const toolCalls = result.result.response.toolCalls;
+
+  const outputItems: any[] = [];
+
+  if (content) {
+    outputItems.push({ type: 'output_text', text: content });
+  }
+
+  if (toolCalls) {
+    for (const tc of toolCalls) {
+      outputItems.push({
+        type: 'function_call',
+        id: tc.id,
+        call_id: tc.id,
+        name: tc.function.name,
+        arguments: tc.function.arguments,
+      });
+    }
+  }
+
   const output: ResponsesOutputItem = {
     type: 'message',
     id: generateMsgId(),
     role: 'assistant',
-    content: [{ type: 'output_text', text: result.result.response.content }],
+    content: outputItems.length > 0 ? outputItems as any : [{ type: 'output_text', text: '' }],
   };
 
   const usage = result.result.response.usage;

@@ -12,6 +12,12 @@ function register(adapter: ProviderAdapter): void {
 register(new OpenAICompatibleAdapter());
 register(new GenericHttpAdapter());
 
+export function resetAdapters(): void {
+  adapters.clear();
+  register(new OpenAICompatibleAdapter());
+  register(new GenericHttpAdapter());
+}
+
 export function getAdapter(type: string): ProviderAdapter | undefined {
   return adapters.get(type);
 }

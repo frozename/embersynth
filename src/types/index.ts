@@ -123,6 +123,7 @@ export interface RequestClassification {
 export interface PlanStage {
   stageIndex: number;
   capability: Capability;
+  capabilities?: Capability[];
   nodeId: string;
   nodeLabel: string;
   inputType: 'original' | 'evidence';

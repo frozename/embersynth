@@ -49,8 +49,7 @@ export async function executePlan(
     const isLastStage = stageIdx === plan.stages.length - 1;
 
     const result = await executeStageWithFallback(
-      stage.capability,
-      stage.nodeId,
+      stage,
       originalMessages,
       evidence,
       isLastStage,
@@ -130,8 +129,7 @@ export async function executePlanStreaming(
     });
 
     const result = await executeStageWithFallback(
-      stage.capability,
-      stage.nodeId,
+      stage,
       originalMessages,
       evidence,
       false,
@@ -169,7 +167,7 @@ export async function executePlanStreaming(
   const toolCallMap: ToolCallMap = new Map();
 
   // Try primary node, then fallbacks
-  const allCandidates = registry.findByCapabilities([finalStage.capability]);
+  const allCandidates = registry.findByCapabilities(finalStage.capabilities ?? [finalStage.capability]);
   const tagFiltered = registry.filterByTags(
     allCandidates.filter((n) => n.id !== finalStage.nodeId),
     profile.requiredTags,
@@ -335,8 +333,7 @@ type Log = ReturnType<typeof withRequestId>;
 
 /** Execute a stage with retry logic and dynamic fallback to alternate nodes */
 async function executeStageWithFallback(
-  capability: Capability,
-  primaryNodeId: string,
+  stage: import('../types/index.js').PlanStage,
   originalMessages: ChatMessage[],
   evidence: EvidenceBundle,
   isLastStage: boolean,
@@ -352,6 +349,9 @@ async function executeStageWithFallback(
   },
   rlog?: Log,
 ): Promise<StageResult | null> {
+  const capability = stage.capability;
+  const primaryNodeId = stage.nodeId;
+
   // Try the primary node first
   const primaryResult = await attemptNode(
     primaryNodeId,
@@ -377,7 +377,7 @@ async function executeStageWithFallback(
   });
 
   // Find alternate node via planner
-  const alternates = registry.findByCapabilities([capability]);
+  const alternates = registry.findByCapabilities(stage.capabilities ?? [capability]);
   const filtered = registry.filterByTags(
     alternates.filter((n) => !failedNodeIds.has(n.id)),
     profile.requiredTags,

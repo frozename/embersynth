@@ -96,7 +96,7 @@ export function buildPlan(
         error: {
           type: 'no-nodes',
           capability: primaryCapability,
-          message: `No healthy node available for capability "${primaryCapability}" with profile "${profile.id}"`,
+          message: `No healthy node for capabilities [${stageCapabilities.join(', ')}] with profile "${profile.id}"`,
         },
       };
     }
@@ -106,12 +106,13 @@ export function buildPlan(
     stages.push({
       stageIndex: i,
       capability: primaryCapability,
+      capabilities: stageCapabilities,
       nodeId: node.id,
       nodeLabel: node.label,
       inputType: i === 0 ? 'original' : 'evidence',
       description: isLast && stages.length > 0
-        ? `Synthesize with ${node.label} (${primaryCapability})`
-        : `Process with ${node.label} (${primaryCapability})`,
+        ? `Synthesize with ${node.label} (${stageCapabilities.join(', ')})`
+        : `Process with ${node.label} (${stageCapabilities.join(', ')})`,
     });
   }
 

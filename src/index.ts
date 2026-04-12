@@ -77,7 +77,6 @@ process.on('SIGINT', () => {
   watcher?.stop();
   monitor.stop();
   server.stop();
-  process.exit(0);
 });
 
 process.on('SIGTERM', () => {
@@ -85,5 +84,4 @@ process.on('SIGTERM', () => {
   watcher?.stop();
   monitor.stop();
   server.stop();
-  process.exit(0);
 });

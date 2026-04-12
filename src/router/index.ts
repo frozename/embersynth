@@ -208,7 +208,20 @@ export async function routeStreaming(
       log.info('no streaming-capable nodes available, falling back to non-streaming', {
         nodeId: finalStage.nodeId,
       });
-      return fallbackToNonStreamingSSE(request, config, registry);
+      const execResult = await executePlan(
+        planResult.plan,
+        request.messages,
+        registry,
+        config.policy,
+        profile,
+        {
+          temperature: request.temperature,
+          maxTokens: request.max_tokens,
+          tools: request.tools,
+          toolChoice: request.tool_choice,
+        },
+      );
+      return convertToSSEStream(execResult, request.model);
     }
   }
 
@@ -237,13 +250,29 @@ export async function routeStreaming(
     return { ok: true, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    log.error('streaming execution failed, trying non-streaming fallback', {
+    log.error('streaming execution failed, retrying final stage non-streaming', {
       error: message,
     });
     traceCtx?.record('error', { message });
     
     try {
-      return await fallbackToNonStreamingSSE(request, config, registry);
+      // Re-execute non-streaming.
+      // KNOWN LIMITATION: executePlan currently re-runs intermediate stages.
+      // We document this limitation here since this is the fallback-of-fallbacks path that should be rare.
+      const execResult = await executePlan(
+        planResult.plan,
+        request.messages,
+        registry,
+        config.policy,
+        profile,
+        {
+          temperature: request.temperature,
+          maxTokens: request.max_tokens,
+          tools: request.tools,
+          toolChoice: request.tool_choice,
+        },
+      );
+      return convertToSSEStream(execResult, request.model);
     } catch (fallbackErr) {
       return {
         ok: false,
@@ -257,20 +286,16 @@ export async function routeStreaming(
 }
 
 /** 
- * Fall back to non-streaming route() and convert the result into a 
- * single-chunk ReadableStream for SSE compatibility.
+ * Convert an OrchestrationResult into a single-chunk ReadableStream 
+ * for SSE compatibility.
  */
-async function fallbackToNonStreamingSSE(
-  request: ChatCompletionRequest,
-  config: EmberSynthConfig,
-  registry: NodeRegistry,
-): Promise<StreamingRouterResult> {
-  const result = await route(request, config, registry);
-  if (!result.ok) return result;
-
+function convertToSSEStream(
+  result: OrchestrationResult,
+  model: string,
+): StreamingRouterResult {
   const encoder = new TextEncoder();
-  const content = result.result.response.content;
-  const toolCalls = result.result.response.toolCalls;
+  const content = result.response.content;
+  const toolCalls = result.response.toolCalls;
   const chunkId = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
 
@@ -280,7 +305,7 @@ async function fallbackToNonStreamingSSE(
         id: chunkId,
         object: 'chat.completion.chunk',
         created,
-        model: request.model,
+        model,
         choices: [{ index: 0, delta: { role: 'assistant' as const }, finish_reason: null }],
       };
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
@@ -290,7 +315,7 @@ async function fallbackToNonStreamingSSE(
         id: chunkId,
         object: 'chat.completion.chunk',
         created,
-        model: request.model,
+        model,
         choices: [
           {
             index: 0,
@@ -305,7 +330,7 @@ async function fallbackToNonStreamingSSE(
         id: chunkId,
         object: 'chat.completion.chunk',
         created,
-        model: request.model,
+        model,
         choices: [{ index: 0, delta: {}, finish_reason: toolCalls ? 'tool_calls' : 'stop' }],
       };
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
@@ -316,7 +341,7 @@ async function fallbackToNonStreamingSSE(
 
   return {
     ok: true,
-    result: { stream, plan: result.result.plan, evidence: result.result.evidence },
+    result: { stream, plan: result.plan, evidence: result.evidence },
   };
 }
 

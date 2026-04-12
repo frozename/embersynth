@@ -1,6 +1,6 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
 import type { ProviderAdapter, NodeDefinition, AdapterRequest, AdapterResponse, HealthStatus } from '../src/types/index.js';
-import { registerAdapter } from '../src/adapters/index.js';
+import { registerAdapter, resetAdapters } from '../src/adapters/index.js';
 
 // Mock streaming adapter for testing
 class MockStreamingAdapter implements ProviderAdapter {
@@ -34,6 +34,10 @@ class MockStreamingAdapter implements ProviderAdapter {
 }
 
 describe('streaming adapter', () => {
+  afterEach(() => {
+    resetAdapters();
+  });
+
   test('mock streaming adapter yields chunks', async () => {
     const adapter = new MockStreamingAdapter(['Hello', ' ', 'world', '!']);
     registerAdapter(adapter);

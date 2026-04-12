@@ -1,3 +1,4 @@
+import pkg from '../../package.json';
 import type { EmberSynthConfig } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 
@@ -57,7 +58,7 @@ export function handleMetrics(config: EmberSynthConfig, registry: NodeRegistry):
 
   const snapshot: MetricsSnapshot = {
     service: 'embersynth',
-    version: '0.2.0',
+    version: pkg.version,
     uptime_ms: Date.now() - startTime,
     nodes: {
       total: allNodes.length,
