@@ -196,10 +196,28 @@ export async function handleResponses(
           controller.enqueue(encoder.encode(
             `event: response.output_text.done\ndata: ${JSON.stringify({ text: fullContent })}\n\n`
           ));
+
+          const outputContent: any[] = [];
+          if (fullContent) {
+            outputContent.push({ type: 'output_text', text: fullContent });
+          }
+          for (const [, tc] of toolCallMap) {
+            outputContent.push({
+              type: 'function_call',
+              id: tc.id,
+              call_id: tc.id,
+              name: tc.name,
+              arguments: tc.arguments,
+            });
+          }
+          if (outputContent.length === 0) {
+            outputContent.push({ type: 'output_text', text: '' });
+          }
+
           controller.enqueue(encoder.encode(
             `event: response.completed\ndata: ${JSON.stringify({
               id: responseId, object: 'response', created_at: created, model: body.model,
-              output: [{ type: 'message', id: msgId, role: 'assistant', content: [{ type: 'output_text', text: fullContent }] }],
+              output: [{ type: 'message', id: msgId, role: 'assistant', content: outputContent }],
             })}\n\n`
           ));
           controller.close();

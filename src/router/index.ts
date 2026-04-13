@@ -5,6 +5,7 @@ import type {
   StreamingOrchestrationResult,
   EmbeddingRequest,
   EmbeddingAdapterResponse,
+  ExecutionPlan,
 } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 import type { TraceContext } from '../tracing/context.js';
@@ -189,7 +190,7 @@ export async function routeStreaming(
 
   if (!finalAdapter?.sendStreamingRequest) {
     // Check if any other node with this capability supports streaming
-    let alternates = registry.findByCapabilities([finalStage.capability])
+    let alternates = registry.findByCapabilities(finalStage.capabilities ?? [finalStage.capability])
       .filter((n) => n.id !== finalStage.nodeId);
     alternates = registry.filterByTags(alternates, profile.requiredTags, profile.excludedTags);
     if (config.policy.requireHealthy) {
@@ -256,11 +257,19 @@ export async function routeStreaming(
     traceCtx?.record('error', { message });
     
     try {
-      // Re-execute non-streaming.
-      // KNOWN LIMITATION: executePlan currently re-runs intermediate stages.
-      // We document this limitation here since this is the fallback-of-fallbacks path that should be rare.
+      // Build a single-stage plan for just the final stage to avoid replaying intermediates
+      const finalOnlyPlan: ExecutionPlan = {
+        ...planResult.plan,
+        id: `${planResult.plan.id}-fallback`,
+        stages: [planResult.plan.stages[planResult.plan.stages.length - 1]],
+      };
+      // Note: If the final stage is 'evidence', change it to 'original' in the single-stage copy since there are no prior stages to provide evidence for this new plan execution context.
+      if (finalOnlyPlan.stages[0].inputType === 'evidence') {
+        finalOnlyPlan.stages[0] = { ...finalOnlyPlan.stages[0], inputType: 'original' };
+      }
+
       const execResult = await executePlan(
-        planResult.plan,
+        finalOnlyPlan,
         request.messages,
         registry,
         config.policy,

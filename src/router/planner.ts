@@ -65,7 +65,8 @@ export function buildPlan(
   const suggestedStages = classification.suggestedStages;
 
   // Apply maxStages constraint from profile
-  const maxStages = profile.maxStages ?? suggestedStages.length;
+  const requestedMax = profile.maxStages ?? suggestedStages.length;
+  const maxStages = Math.max(1, requestedMax);
   const effectiveStages = suggestedStages.slice(-maxStages); // keep last N stages (always keep reasoning)
 
   // Validate that truncation did not drop required capabilities
