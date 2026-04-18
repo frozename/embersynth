@@ -220,28 +220,23 @@ export interface StreamingOrchestrationResult {
 }
 
 // ── OpenAI-compatible API types ──
+//
+// The chat-message family below is now sourced from @nova/contracts.
+// Local names remain as aliases so existing consumers keep compiling
+// without a big-bang import rewrite; the Nova types are wire-compatible
+// supersets (Nova's ChatMessage adds a 'developer' role and an optional
+// `name` field, ContentPart adds an audio block variant — all
+// backwards-safe for existing usage sites).
 
-export interface ChatMessage {
-  role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string | ContentPart[] | null;
-  tool_calls?: import('./tools.js').ToolCall[];
-  tool_call_id?: string;
-}
+import type {
+  ChatMessage as NovaChatMessage,
+  ContentBlock as NovaContentBlock,
+} from '@nova/contracts';
 
-export type ContentPart = TextContent | ImageContent;
-
-export interface TextContent {
-  type: 'text';
-  text: string;
-}
-
-export interface ImageContent {
-  type: 'image_url';
-  image_url: {
-    url: string;
-    detail?: 'auto' | 'low' | 'high';
-  };
-}
+export type ChatMessage = NovaChatMessage;
+export type ContentPart = NovaContentBlock;
+export type TextContent = Extract<NovaContentBlock, { type: 'text' }>;
+export type ImageContent = Extract<NovaContentBlock, { type: 'image_url' }>;
 
 export interface ChatCompletionRequest {
   model: string;

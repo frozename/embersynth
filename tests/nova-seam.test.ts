@@ -3,7 +3,9 @@ import {
   UnifiedAiRequestSchema,
   ChatMessageSchema,
   createOpenAICompatProvider,
+  type ChatMessage as NovaChatMessage,
 } from '@nova/contracts';
+import type { ChatMessage as EmbersynthChatMessage } from '../src/types/index.js';
 
 /**
  * Seam test — proves embersynth can resolve and import from the
@@ -39,5 +41,14 @@ describe('nova-seam: @nova/contracts import works from embersynth', () => {
       apiKey: 'none',
     });
     expect(p.name).toBe('nova-seam');
+  });
+
+  test('embersynth ChatMessage IS Nova ChatMessage (alias identity)', () => {
+    // Compile-time assertion: if embersynth's ChatMessage ever drifts
+    // from Nova's, this assignment fails typecheck. The runtime check
+    // is a tautology that keeps the test suite honest about the intent.
+    const msg: EmbersynthChatMessage = { role: 'user', content: 'hi' };
+    const also: NovaChatMessage = msg;
+    expect(also.role).toBe('user');
   });
 });
