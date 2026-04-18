@@ -1,3 +1,4 @@
+import { createOpenAICompatProvider } from '@nova/contracts';
 import type {
   ProviderAdapter,
   NodeDefinition,
@@ -11,6 +12,44 @@ import type {
 import type { ToolCallDelta } from '../types/tools.js';
 import { buildHeaders } from './generic-http.js';
 import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
+
+/**
+ * Delegation note (M.3, 2026-04-18):
+ *
+ * `sendEmbeddingRequest` below delegates to nova.createOpenAICompatProvider
+ * so the HTTP + auth + latency-metric bookkeeping for embeddings lives in
+ * Nova alongside llamactl's and sirius's equivalents. Chat paths stay
+ * embersynth-native because:
+ *
+ *   * `prepareMessages` performs evidence injection + systemPromptOverride
+ *     merging — orchestration-layer concerns Nova shouldn't know about.
+ *   * Nova's `streamResponse` chunks currently drop tool_call deltas
+ *     (see nova/packages/contracts/src/providers/openai-compat.ts:158-167).
+ *     Delegating streaming would regress tool-call-heavy workloads until
+ *     Nova widens its delta shape.
+ *   * Nova's `healthCheck` probes `/models` (auth-gated); embersynth's
+ *     adapter respects per-node `health.endpoint` (cheaper /health on
+ *     llama-servers). A future slice can expose Nova's health shape as
+ *     an opt-in once that config toggle lands.
+ *
+ * This file's public surface (ProviderAdapter interface, AdapterResponse,
+ * streaming markers) stays unchanged.
+ */
+
+function novaProviderForNode(node: NodeDefinition): ReturnType<typeof createOpenAICompatProvider> {
+  const baseUrl = `${node.endpoint}/v1`;
+  const token = node.auth.type === 'bearer' ? node.auth.token ?? '' : '';
+  const extraHeaders: Record<string, string> = {};
+  if (node.auth.type === 'header' && node.auth.headerName && node.auth.headerValue) {
+    extraHeaders[node.auth.headerName] = node.auth.headerValue;
+  }
+  return createOpenAICompatProvider({
+    name: node.id,
+    baseUrl,
+    apiKey: token,
+    ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
+  });
+}
 
 /** Prepare messages with evidence injection */
 function prepareMessages(request: AdapterRequest): ChatMessage[] {
@@ -230,45 +269,32 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     node: NodeDefinition,
     request: EmbeddingAdapterRequest,
   ): Promise<EmbeddingAdapterResponse> {
-    const url = `${node.endpoint}/v1/embeddings`;
-
-    const body = {
-      model: node.modelId ?? 'default',
-      input: request.input,
-    };
-
+    const provider = novaProviderForNode(node);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: buildHeaders(node),
-        body: JSON.stringify(body),
-        signal: controller.signal,
+      const res = await provider.createEmbeddings!({
+        model: node.modelId ?? 'default',
+        input: request.input,
       });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Node ${node.id} returned ${response.status}: ${text}`);
-      }
-
-      const data = (await response.json()) as {
-        data?: { embedding?: number[]; index?: number }[];
-        usage?: { prompt_tokens?: number; total_tokens?: number };
-      };
-
-      const embeddings = (data.data ?? []).map((d) => d.embedding ?? []);
-
+      const embeddings = res.data
+        // Nova's embedding row allows number[] | string (base64). Embersynth
+        // adapters consume numeric vectors only; if a provider returns
+        // base64, upstream should pass `encoding_format: 'float'`.
+        .map((row) => (Array.isArray(row.embedding) ? row.embedding : []));
       return {
         embeddings,
-        usage: data.usage
+        usage: res.usage
           ? {
-              promptTokens: data.usage.prompt_tokens ?? 0,
-              totalTokens: data.usage.total_tokens ?? 0,
+              promptTokens: res.usage.prompt_tokens,
+              totalTokens: res.usage.total_tokens,
             }
           : undefined,
       };
+    } catch (err) {
+      // Nova throws on non-ok; surface the message unchanged so upstream
+      // health tracking keeps the existing failure shape.
+      throw err instanceof Error ? err : new Error(String(err));
     } finally {
       clearTimeout(timeoutId);
     }
