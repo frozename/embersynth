@@ -21,7 +21,7 @@
     "typescript": "^5.7.0"
   },
   "dependencies": {
-    "@nova/contracts": "file:../nova",
+    "@nova/contracts": "file:../nova/packages/contracts",
     "yaml": "^2.7.0",
     "zod": "^4.3.6"
   }
