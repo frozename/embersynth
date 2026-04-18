@@ -397,7 +397,21 @@ export async function routeEmbedding(
 
   traceCtx?.record('plan', { capability: 'embedding', candidates: candidates.map((n) => n.id) });
 
-  const input = Array.isArray(request.input) ? request.input : [request.input];
+  // Nova widens EmbeddingRequest.input to allow pre-tokenized numeric
+  // arrays (`number[]` / `number[][]`). Embersynth's adapters expect
+  // string[] only, so reject anything else early rather than letting
+  // a numeric input reach a provider that can't handle it.
+  const rawInput = Array.isArray(request.input) ? request.input : [request.input];
+  if (rawInput.some((v) => typeof v !== 'string')) {
+    return {
+      ok: false,
+      error: {
+        status: 400,
+        message: 'embersynth: pre-tokenized numeric embedding input is not supported yet',
+      },
+    };
+  }
+  const input = rawInput as string[];
   let lastError: string | undefined;
   let hasAdapterSupport = false;
 
