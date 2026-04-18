@@ -4,8 +4,16 @@ import {
   ChatMessageSchema,
   createOpenAICompatProvider,
   type ChatMessage as NovaChatMessage,
+  type UnifiedAiRequest as NovaUnifiedAiRequest,
+  type UnifiedEmbeddingRequest as NovaUnifiedEmbeddingRequest,
+  type UnifiedEmbeddingResponse as NovaUnifiedEmbeddingResponse,
 } from '@nova/contracts';
-import type { ChatMessage as EmbersynthChatMessage } from '../src/types/index.js';
+import type {
+  ChatCompletionRequest as EmbersynthChatRequest,
+  ChatMessage as EmbersynthChatMessage,
+  EmbeddingRequest as EmbersynthEmbeddingRequest,
+  EmbeddingResponse as EmbersynthEmbeddingResponse,
+} from '../src/types/index.js';
 
 /**
  * Seam test — proves embersynth can resolve and import from the
@@ -50,5 +58,31 @@ describe('nova-seam: @nova/contracts import works from embersynth', () => {
     const msg: EmbersynthChatMessage = { role: 'user', content: 'hi' };
     const also: NovaChatMessage = msg;
     expect(also.role).toBe('user');
+  });
+
+  test('ChatCompletionRequest / EmbeddingRequest / EmbeddingResponse alias Nova', () => {
+    const req: EmbersynthChatRequest = {
+      model: 'local',
+      messages: [{ role: 'user', content: 'hi' }],
+      frequency_penalty: 0.1,
+      presence_penalty: 0.1,
+    };
+    const alsoReq: NovaUnifiedAiRequest = req;
+    expect(alsoReq.model).toBe('local');
+
+    const embReq: EmbersynthEmbeddingRequest = {
+      model: 'text-embed-3-small',
+      input: 'hello',
+    };
+    const alsoEmbReq: NovaUnifiedEmbeddingRequest = embReq;
+    expect(alsoEmbReq.model).toBe('text-embed-3-small');
+
+    const embRes: EmbersynthEmbeddingResponse = {
+      object: 'list',
+      model: 'text-embed-3-small',
+      data: [{ object: 'embedding', index: 0, embedding: [0.1, 0.2] }],
+    };
+    const alsoEmbRes: NovaUnifiedEmbeddingResponse = embRes;
+    expect(alsoEmbRes.data[0]!.index).toBe(0);
   });
 });

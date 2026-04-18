@@ -231,6 +231,7 @@ export interface StreamingOrchestrationResult {
 import type {
   ChatMessage as NovaChatMessage,
   ContentBlock as NovaContentBlock,
+  UnifiedAiRequest as NovaUnifiedAiRequest,
 } from '@nova/contracts';
 
 export type ChatMessage = NovaChatMessage;
@@ -238,18 +239,16 @@ export type ContentPart = NovaContentBlock;
 export type TextContent = Extract<NovaContentBlock, { type: 'text' }>;
 export type ImageContent = Extract<NovaContentBlock, { type: 'image_url' }>;
 
-export interface ChatCompletionRequest {
-  model: string;
-  messages: ChatMessage[];
-  temperature?: number;
-  max_tokens?: number;
-  stream?: boolean;
-  top_p?: number;
-  frequency_penalty?: number;
-  presence_penalty?: number;
-  tools?: { type: 'function'; function: import('./tools.js').ToolDefinition }[];
-  tool_choice?: 'auto' | 'none' | { type: 'function'; function: { name: string } };
-}
+/**
+ * Chat-completion request — alias onto @nova/contracts. Nova's shape
+ * is a proper superset of the OpenAI chat-completion dialect
+ * embersynth was modelling locally; additional fields (`stop`,
+ * `response_format`, `user`, `providerOptions`, `capabilities`) are
+ * all optional and flow through without affecting existing routing.
+ * Nova's `tool_choice` also accepts `'required'`, which OpenAI added
+ * after embersynth's local type was written.
+ */
+export type ChatCompletionRequest = NovaUnifiedAiRequest;
 
 export interface ChatCompletionResponse {
   id: string;
@@ -289,26 +288,21 @@ export interface ChatCompletionChunk {
 }
 
 // ── Embeddings API types ──
+//
+// Sourced from @nova/contracts. Nova's shape is a proper superset:
+// accepts additional input types (numeric arrays for pre-tokenized
+// input), surfaces `user` / `dimensions` / `providerOptions`, and
+// allows `embedding` to be a base64-encoded string when
+// `encoding_format: 'base64'` is set. All fields that embersynth
+// previously used keep the same names and semantics.
 
-export interface EmbeddingRequest {
-  model: string;
-  input: string | string[];
-  encoding_format?: 'float' | 'base64';
-}
+import type {
+  UnifiedEmbeddingRequest as NovaUnifiedEmbeddingRequest,
+  UnifiedEmbeddingResponse as NovaUnifiedEmbeddingResponse,
+} from '@nova/contracts';
 
-export interface EmbeddingResponse {
-  object: 'list';
-  data: {
-    object: 'embedding';
-    embedding: number[];
-    index: number;
-  }[];
-  model: string;
-  usage: {
-    prompt_tokens: number;
-    total_tokens: number;
-  };
-}
+export type EmbeddingRequest = NovaUnifiedEmbeddingRequest;
+export type EmbeddingResponse = NovaUnifiedEmbeddingResponse;
 
 // ── Responses API types ──
 
