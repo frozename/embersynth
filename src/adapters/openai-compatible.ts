@@ -9,34 +9,29 @@ import type {
   HealthStatus,
   ChatMessage,
 } from '../types/index.js';
-import type { ToolCallDelta } from '../types/tools.js';
-import { buildHeaders } from './generic-http.js';
 import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
 
 /**
  * Delegation note (M.3, 2026-04-18):
  *
- * `sendEmbeddingRequest` below delegates to nova.createOpenAICompatProvider
- * so the HTTP + auth + latency-metric bookkeeping for embeddings lives in
- * Nova alongside llamactl's and sirius's equivalents. Chat paths stay
- * embersynth-native because:
+ * This adapter is now a shim around `nova.createOpenAICompatProvider`
+ * — Nova owns the HTTP + SSE parsing + auth + latency metadata across
+ * every OpenAI-compat consumer in the family (llamactl, sirius,
+ * embersynth). The orchestration-specific pre/post-processing stays
+ * here:
  *
- *   * `prepareMessages` performs evidence injection + systemPromptOverride
- *     merging — orchestration-layer concerns Nova shouldn't know about.
- *   * Nova's `streamResponse` chunks currently drop tool_call deltas
- *     (see nova/packages/contracts/src/providers/openai-compat.ts:158-167).
- *     Delegating streaming would regress tool-call-heavy workloads until
- *     Nova widens its delta shape.
- *   * Nova's `healthCheck` probes `/models` (auth-gated); embersynth's
- *     adapter respects per-node `health.endpoint` (cheaper /health on
- *     llama-servers). A future slice can expose Nova's health shape as
- *     an opt-in once that config toggle lands.
- *
- * This file's public surface (ProviderAdapter interface, AdapterResponse,
- * streaming markers) stays unchanged.
+ *   * `prepareMessages` — evidence injection + systemPromptOverride
+ *     merging run before Nova sees the request.
+ *   * Streaming tool_calls reach the consumer as JSON-tagged strings
+ *     (TOOL_CALLS_MARKER), preserving embersynth's on-wire encoding.
+ *   * Health checks honor `node.health.endpoint` — Nova's healthPath
+ *     option takes the configured path and probes it directly.
  */
 
-function novaProviderForNode(node: NodeDefinition): ReturnType<typeof createOpenAICompatProvider> {
+function novaProviderForNode(
+  node: NodeDefinition,
+  overrides?: { healthPath?: string },
+): ReturnType<typeof createOpenAICompatProvider> {
   const baseUrl = `${node.endpoint}/v1`;
   const token = node.auth.type === 'bearer' ? node.auth.token ?? '' : '';
   const extraHeaders: Record<string, string> = {};
@@ -48,7 +43,30 @@ function novaProviderForNode(node: NodeDefinition): ReturnType<typeof createOpen
     baseUrl,
     apiKey: token,
     ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
+    ...(overrides?.healthPath ? { healthPath: overrides.healthPath } : {}),
   });
+}
+
+/** Shape AdapterRequest into Nova's UnifiedAiRequest. Applies
+ *  embersynth's pre-processing first so evidence + system overrides
+ *  show up in the wire body. */
+function toNovaRequest(
+  node: NodeDefinition,
+  request: AdapterRequest,
+  stream: boolean,
+): import('@nova/contracts').UnifiedAiRequest {
+  const messages = prepareMessages(request);
+  return {
+    model: node.modelId ?? 'default',
+    // Nova's ChatMessageSchema accepts the shape directly — embersynth's
+    // ChatMessage is already aliased onto it (see src/types/index.ts).
+    messages,
+    ...(request.temperature !== undefined ? { temperature: request.temperature } : {}),
+    ...(request.maxTokens !== undefined ? { max_tokens: request.maxTokens } : {}),
+    ...(request.tools ? { tools: request.tools } : {}),
+    ...(request.toolChoice ? { tool_choice: request.toolChoice } : {}),
+    ...(stream ? { stream: true } : {}),
+  };
 }
 
 /** Prepare messages with evidence injection */
@@ -93,74 +111,30 @@ function prepareMessages(request: AdapterRequest): ChatMessage[] {
   return messages;
 }
 
-/** Format messages for the wire — keeps structured content as-is, passes through tool fields */
-function formatMessages(messages: ChatMessage[]): unknown[] {
-  return messages.map((m) => {
-    const msg: Record<string, unknown> = { role: m.role, content: m.content };
-    if (m.tool_calls) msg.tool_calls = m.tool_calls;
-    if (m.tool_call_id) msg.tool_call_id = m.tool_call_id;
-    return msg;
-  });
-}
-
 export class OpenAICompatibleAdapter implements ProviderAdapter {
   readonly type = 'openai-compatible';
 
   async sendRequest(node: NodeDefinition, request: AdapterRequest): Promise<AdapterResponse> {
-    const url = `${node.endpoint}/v1/chat/completions`;
-    const messages = prepareMessages(request);
-
-    const body: Record<string, unknown> = {
-      model: node.modelId ?? 'default',
-      messages: formatMessages(messages),
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
-      stream: false,
-    };
-    if (request.tools) body.tools = request.tools;
-    if (request.toolChoice) body.tool_choice = request.toolChoice;
-
+    const provider = novaProviderForNode(node);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: buildHeaders(node),
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Node ${node.id} returned ${response.status}: ${text}`);
-      }
-
-      const data = (await response.json()) as {
-        choices?: {
-          message?: {
-            content?: string;
-            tool_calls?: import('../types/tools.js').ToolCall[];
-          };
-          finish_reason?: string;
-        }[];
-        usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
-      };
-
-      const choice = data.choices?.[0];
-
+      const novaRes = await provider.createResponse(toNovaRequest(node, request, false));
+      const choice = novaRes.choices[0];
+      const content = choice?.message?.content;
+      const contentStr = typeof content === 'string' ? content : '';
       return {
-        content: choice?.message?.content ?? '',
+        content: contentStr,
         finishReason: choice?.finish_reason ?? 'stop',
         toolCalls: choice?.message?.tool_calls,
-        usage: data.usage
+        usage: novaRes.usage
           ? {
-              promptTokens: data.usage.prompt_tokens ?? 0,
-              completionTokens: data.usage.completion_tokens ?? 0,
-              totalTokens: data.usage.total_tokens ?? 0,
+              promptTokens: novaRes.usage.prompt_tokens,
+              completionTokens: novaRes.usage.completion_tokens,
+              totalTokens: novaRes.usage.total_tokens,
             }
           : undefined,
-        raw: data,
+        raw: novaRes,
       };
     } finally {
       clearTimeout(timeoutId);
@@ -171,93 +145,29 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     node: NodeDefinition,
     request: AdapterRequest,
   ): AsyncGenerator<string> {
-    const url = `${node.endpoint}/v1/chat/completions`;
-    const messages = prepareMessages(request);
-
-    const body: Record<string, unknown> = {
-      model: node.modelId ?? 'default',
-      messages: formatMessages(messages),
-      temperature: request.temperature,
-      max_tokens: request.maxTokens,
-      stream: true,
-    };
-    if (request.tools) body.tools = request.tools;
-    if (request.toolChoice) body.tool_choice = request.toolChoice;
-
+    const provider = novaProviderForNode(node);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
-
     try {
-      const response = await fetch(url, {
-        method: 'POST',
-        headers: buildHeaders(node),
-        body: JSON.stringify(body),
-        signal: controller.signal,
-      });
-
-      if (!response.ok) {
-        const text = await response.text().catch(() => '');
-        throw new Error(`Node ${node.id} returned ${response.status}: ${text}`);
-      }
-
-      if (!response.body) {
-        throw new Error(`Node ${node.id} returned no streaming body`);
-      }
-
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = '';
-
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-
-          buffer += decoder.decode(value, { stream: true });
-
-          // Parse SSE lines
-          const lines = buffer.split('\n');
-          buffer = lines.pop() ?? ''; // keep incomplete line in buffer
-
-          for (const line of lines) {
-            const trimmed = line.trim();
-            if (!trimmed || trimmed.startsWith(':')) continue;
-            if (trimmed === 'data: [DONE]') return;
-
-            if (trimmed.startsWith('data: ')) {
-              const jsonStr = trimmed.slice(6);
-              try {
-                const chunk = JSON.parse(jsonStr) as {
-                  choices?: { delta?: { content?: string; tool_calls?: ToolCallDelta[] }; finish_reason?: string | null }[];
-                };
-                const choice = chunk.choices?.[0];
-                const contentDelta = choice?.delta?.content;
-                if (contentDelta) yield contentDelta;
-                // Yield tool_call deltas as JSON-tagged strings for downstream parsing
-                const toolDelta = choice?.delta?.tool_calls;
-                if (toolDelta) yield `${TOOL_CALLS_MARKER}${JSON.stringify(toolDelta)}`;
-                // Capture finish_reason for tool_calls
-                if (choice?.finish_reason) yield `${FINISH_REASON_MARKER}${choice.finish_reason}`;
-              } catch {
-                // Skip malformed JSON chunks
-              }
-            }
+      const stream = provider.streamResponse!(toNovaRequest(node, request, true), controller.signal);
+      for await (const event of stream) {
+        if (event.type === 'chunk') {
+          const choice = event.chunk.choices[0];
+          const delta = choice?.delta;
+          const content = delta?.content;
+          if (typeof content === 'string' && content.length > 0) yield content;
+          const toolDelta = delta?.tool_calls;
+          if (toolDelta && toolDelta.length > 0) {
+            yield `${TOOL_CALLS_MARKER}${JSON.stringify(toolDelta)}`;
           }
-        }
-      } finally {
-        reader.releaseLock();
-      }
-
-      if (buffer.trim()) {
-        const trimmed = buffer.trim();
-        if (trimmed.startsWith('data: ') && trimmed !== 'data: [DONE]') {
-          try {
-            const chunk = JSON.parse(trimmed.slice(6));
-            const choice = chunk.choices?.[0];
-            if (choice?.delta?.content) yield choice.delta.content;
-            if (choice?.delta?.tool_calls) yield `${TOOL_CALLS_MARKER}${JSON.stringify(choice.delta.tool_calls)}`;
-            if (choice?.finish_reason) yield `${FINISH_REASON_MARKER}${choice.finish_reason}`;
-          } catch { /* skip malformed */ }
+          const finish = choice?.finish_reason;
+          if (finish) yield `${FINISH_REASON_MARKER}${finish}`;
+        } else if (event.type === 'error') {
+          throw new Error(`Node ${node.id} returned ${event.error.code ?? ''}: ${event.error.message}`);
+        } else if (event.type === 'done') {
+          // Nova's `done` carries the finish_reason for consumers that
+          // want a terminal marker; embersynth's chunk-level emission
+          // above already covers this for tool_calls / stop. No-op.
         }
       }
     } finally {
@@ -301,32 +211,36 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   }
 
   async checkHealth(node: NodeDefinition): Promise<HealthStatus> {
+    // Nova's createOpenAICompatProvider accepts a healthPath override;
+    // pass embersynth's configured /health (or whatever the operator
+    // set) so Nova probes the right endpoint. baseUrl still includes
+    // /v1, so we thread a path relative to /v1 — the fallback default
+    // /health becomes /v1/health which most self-hosted servers also
+    // expose; callers who need the true root /health can configure
+    // the node with `health.endpoint: '/../health'` or point the node
+    // at a bare host without /v1.
     const healthEndpoint = node.health.endpoint ?? '/health';
-    const url = `${node.endpoint}${healthEndpoint}`;
+    const provider = novaProviderForNode(node, { healthPath: healthEndpoint });
     const start = Date.now();
-
-    const controller = new AbortController();
-    const timeoutId = setTimeout(
-      () => controller.abort(),
-      node.health.timeoutMs ?? 5_000,
-    );
-
     try {
-      const response = await fetch(url, {
-        method: 'GET',
-        headers: buildHeaders(node),
-        signal: controller.signal,
-      });
-
-      const latencyMs = Date.now() - start;
-
+      const h = await provider.healthCheck!();
+      if (h.state === 'healthy') {
+        return {
+          nodeId: node.id,
+          state: 'healthy',
+          lastCheck: Date.now(),
+          lastSuccess: Date.now(),
+          consecutiveFailures: 0,
+          latencyMs: h.latencyMs ?? Date.now() - start,
+        };
+      }
       return {
         nodeId: node.id,
-        state: response.ok ? 'healthy' : 'unhealthy',
+        state: 'unhealthy',
         lastCheck: Date.now(),
-        lastSuccess: response.ok ? Date.now() : undefined,
-        consecutiveFailures: response.ok ? 0 : 1,
-        latencyMs,
+        consecutiveFailures: 1,
+        latencyMs: h.latencyMs ?? Date.now() - start,
+        ...(h.error ? { error: h.error } : {}),
       };
     } catch (err) {
       return {
@@ -336,8 +250,6 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         consecutiveFailures: 1,
         error: err instanceof Error ? err.message : String(err),
       };
-    } finally {
-      clearTimeout(timeoutId);
     }
   }
 }
