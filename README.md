@@ -26,12 +26,13 @@ Client ──► EmberSynth ──► Memory Node ──► Retrieval Node ─�
 ```text
 src/
 ├── api/            # HTTP server, route handlers (completions, embeddings, responses, metrics)
-├── adapters/       # Provider adapters (OpenAI-compatible, generic HTTP)
+├── adapters/       # Provider adapters (OpenAI-compatible via @nova/contracts, generic HTTP)
 ├── cli/            # CLI tools (status, check-config, test-node, list-nodes, list-profiles)
 ├── config/         # Config loading, defaults, env var interpolation
 ├── evidence/       # Evidence compression for multi-stage pipelines
 ├── health/         # Health monitoring
 ├── logger/         # Structured JSON logging with request tracing
+├── mcp/            # @embersynth/mcp — stdio MCP server projecting ops surface as tools
 ├── registry/       # Node registry with capability/tag/health filtering
 ├── router/         # Request classifier, planner, executor (with streaming + dynamic re-routing)
 └── types/          # All TypeScript interfaces
@@ -390,12 +391,40 @@ When `evidenceCompression: true` in policy:
 
 | Adapter | Key | Compatible with |
 |---------|-----|-----------------|
-| OpenAI-compatible | `openai-compatible` | Ollama, llama.cpp, vLLM, LocalAI, LM Studio |
+| OpenAI-compatible | `openai-compatible` | Ollama, llama.cpp, vLLM, LocalAI, LM Studio — implementation delegates to `@nova/contracts`'s `createOpenAICompatProvider`. Chat, embeddings, streaming events, tool-call deltas share a single wire path across the llamactl / sirius / embersynth family. |
 | Generic HTTP | `generic-http` | Custom services with `/generate` endpoint |
 
 Both adapters support health checking, auth, timeouts, and the embedding interface.
 
 To add a new adapter, implement the `ProviderAdapter` interface and call `registerAdapter()`.
+
+## MCP server
+
+EmberSynth ships an `@embersynth/mcp` stdio server that projects its
+operator surface — node health, profile listing, config status,
+synthetic-model mappings — as MCP tools. Wire into Claude Desktop or
+any MCP client:
+
+```bash
+bun src/mcp/bin/embersynth-mcp.ts
+```
+
+See `src/mcp/server.ts` for the tool surface. Audit + content
+envelopes reuse `@nova/mcp-shared` so the records interoperate with
+llamactl and sirius audit trails.
+
+## Family
+
+Part of the llamactl family:
+
+- [nova](../nova/) — canonical AI-provider contracts + cross-cutting
+  MCP helpers (`@nova/contracts`, `@nova/mcp-shared`, `@nova/mcp`).
+  EmberSynth's OpenAI-compat adapter delegates to Nova's provider
+  factory; adapter fixes in one place benefit every consumer.
+- [llamactl](../llamactl/) — single-operator control plane for
+  llama.cpp fleets (kubeconfig, workloads, infra deploy).
+- [sirius-gateway](../sirius-gateway/) — unified gateway for
+  multiple external AI providers (OpenAI, Anthropic, …).
 
 ## Design principles
 
