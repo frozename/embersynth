@@ -1,4 +1,6 @@
 import { createOpenAICompatProvider } from '@nova/contracts';
+import type { OpenAICompatUsageSnapshot } from '@nova/contracts';
+import { appendUsageBackground } from '@nova/mcp-shared';
 import type {
   ProviderAdapter,
   NodeDefinition,
@@ -10,6 +12,34 @@ import type {
   ChatMessage,
 } from '../types/index.js';
 import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
+
+/**
+ * Default onUsage handler — append the per-call token usage to the
+ * family-wide JSONL sink. Fire-and-forget via queueMicrotask inside
+ * appendUsageBackground; errors swallowed so a full disk can't
+ * disturb the response path. Disabled when $EMBERSYNTH_DISABLE_USAGE
+ * is set (tests or strict no-IO deployments).
+ */
+function defaultOnUsage(node: NodeDefinition): ((s: OpenAICompatUsageSnapshot) => void) | undefined {
+  if (process.env.EMBERSYNTH_DISABLE_USAGE) return undefined;
+  return (snapshot) => {
+    queueMicrotask(() => {
+      appendUsageBackground({
+        record: {
+          ts: new Date().toISOString(),
+          provider: snapshot.provider,
+          model: snapshot.model,
+          kind: snapshot.kind,
+          prompt_tokens: snapshot.prompt_tokens,
+          completion_tokens: snapshot.completion_tokens,
+          total_tokens: snapshot.total_tokens,
+          latency_ms: snapshot.latency_ms,
+          route: `embersynth:${node.id}`,
+        },
+      });
+    });
+  };
+}
 
 /**
  * Delegation note (M.3, 2026-04-18):
@@ -30,7 +60,7 @@ import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
 
 function novaProviderForNode(
   node: NodeDefinition,
-  overrides?: { healthPath?: string },
+  overrides?: { healthPath?: string; skipUsage?: boolean },
 ): ReturnType<typeof createOpenAICompatProvider> {
   const baseUrl = `${node.endpoint}/v1`;
   const token = node.auth.type === 'bearer' ? node.auth.token ?? '' : '';
@@ -38,12 +68,14 @@ function novaProviderForNode(
   if (node.auth.type === 'header' && node.auth.headerName && node.auth.headerValue) {
     extraHeaders[node.auth.headerName] = node.auth.headerValue;
   }
+  const onUsage = overrides?.skipUsage ? undefined : defaultOnUsage(node);
   return createOpenAICompatProvider({
     name: node.id,
     baseUrl,
     apiKey: token,
     ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
     ...(overrides?.healthPath ? { healthPath: overrides.healthPath } : {}),
+    ...(onUsage ? { onUsage } : {}),
   });
 }
 
@@ -220,7 +252,10 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     // the node with `health.endpoint: '/../health'` or point the node
     // at a bare host without /v1.
     const healthEndpoint = node.health.endpoint ?? '/health';
-    const provider = novaProviderForNode(node, { healthPath: healthEndpoint });
+    const provider = novaProviderForNode(node, {
+      healthPath: healthEndpoint,
+      skipUsage: true, // health probes don't need usage logging
+    });
     const start = Date.now();
     try {
       const h = await provider.healthCheck!();
