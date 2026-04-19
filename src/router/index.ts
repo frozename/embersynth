@@ -1,11 +1,13 @@
 import type {
   ChatCompletionRequest,
   EmberSynthConfig,
+  NodeDefinition,
   OrchestrationResult,
   StreamingOrchestrationResult,
   EmbeddingRequest,
   EmbeddingAdapterResponse,
   ExecutionPlan,
+  RoutingProfile,
 } from '../types/index.js';
 import type { NodeRegistry } from '../registry/registry.js';
 import type { TraceContext } from '../tracing/context.js';
@@ -15,6 +17,7 @@ import { executePlan, executePlanStreaming } from './executor.js';
 import { resolveProfileFromModel } from '../config/loader.js';
 import { getAdapter } from '../adapters/index.js';
 import { log } from '../logger/index.js';
+import { appendEvidence } from '../evidence/index.js';
 
 export interface RouterError {
   status: number;
@@ -33,6 +36,113 @@ export type StreamingRouterResult =
 export type EmbeddingRouterResult =
   | { ok: true; result: EmbeddingAdapterResponse; model: string; nodeId: string }
   | { ok: false; error: RouterError };
+
+/**
+ * Simulated-route candidate — the shape the MCP `embersynth.route.simulate`
+ * tool returns. Score is derived from node priority (lower priority
+ * number → higher score, inverted to [0,1]); reasons list the matched
+ * required tags, capabilities, and the stage that selected the node.
+ */
+export interface SimulatedCandidate {
+  nodeId: string;
+  score: number;
+  reasons: string[];
+}
+
+export interface SimulatedPlan {
+  profileId: string;
+  candidates: SimulatedCandidate[];
+  winner: { nodeId: string } | null;
+  plan?: ExecutionPlan;
+}
+
+export type SimulatedPlanResult =
+  | { ok: true; result: SimulatedPlan }
+  | { ok: false; error: RouterError };
+
+function candidateReasons(
+  node: NodeDefinition,
+  profile: RoutingProfile,
+  finalCapabilities: readonly string[],
+): string[] {
+  const reasons: string[] = [];
+  const nodeCapSet: string[] = node.capabilities as unknown as string[];
+  const matchedCaps = finalCapabilities.filter((c) => nodeCapSet.includes(c));
+  if (matchedCaps.length > 0) {
+    reasons.push(`capabilities:${matchedCaps.join(',')}`);
+  }
+  if (profile.requiredTags?.length) {
+    const matched = profile.requiredTags.filter((t) => node.tags.includes(t));
+    if (matched.length > 0) reasons.push(`tags:${matched.join(',')}`);
+  }
+  reasons.push(`priority:${node.priority}`);
+  return reasons;
+}
+
+/**
+ * Plan-only variant of `route()` — computes the classification + plan
+ * for inspection/simulation without executing anything. Pure: no
+ * network calls, no registry mutation, no audit side-effects. Used by
+ * the MCP `embersynth.route.simulate` tool.
+ */
+export function planRoute(
+  request: ChatCompletionRequest,
+  config: EmberSynthConfig,
+  registry: NodeRegistry,
+): SimulatedPlanResult {
+  const profile = resolveProfileFromModel(request.model, config);
+  if (!profile) {
+    return {
+      ok: false,
+      error: {
+        status: 400,
+        message: `Unknown model "${request.model}". Available: ${Object.keys(config.syntheticModels).join(', ')}`,
+      },
+    };
+  }
+
+  const classification = classifyRequest(request.messages);
+  const planResult = buildPlan(classification, profile, config.policy, registry);
+  if (!planResult.ok) {
+    const status = planResult.error.type === 'capability-gap' ? 422 : 503;
+    return {
+      ok: false,
+      error: {
+        status,
+        message: planResult.error.message,
+        detail: planResult.error.message,
+      },
+    };
+  }
+
+  const plan = planResult.plan;
+  const finalStage = plan.stages[plan.stages.length - 1];
+  const finalCaps = finalStage.capabilities ?? [finalStage.capability];
+
+  // Candidate pool: nodes supporting the final stage's capability set,
+  // filtered by profile tags. Score is priority-inverted into [0,1]:
+  // lower priority number → higher score.
+  let pool = registry.findByCapabilities(finalCaps);
+  pool = registry.filterByTags(pool, profile.requiredTags, profile.excludedTags);
+  const sorted = registry.sortByPriority(pool);
+  const maxPriority = sorted.reduce((m, n) => Math.max(m, n.priority), 1) || 1;
+
+  const candidates: SimulatedCandidate[] = sorted.map((n) => ({
+    nodeId: n.id,
+    score: Number((1 - n.priority / (maxPriority + 1)).toFixed(4)),
+    reasons: candidateReasons(n, profile, finalCaps),
+  }));
+
+  return {
+    ok: true,
+    result: {
+      profileId: profile.id,
+      candidates,
+      winner: { nodeId: finalStage.nodeId },
+      plan,
+    },
+  };
+}
 
 /** Main router: classify -> plan -> execute */
 export async function route(
@@ -95,6 +205,33 @@ export async function route(
     stages: planResult.plan.stages.length,
     stageNodes: planResult.plan.stages.map((s) => `${s.capability}→${s.nodeId}`),
   });
+
+  // One evidence record per routing decision — best-effort JSONL sink
+  // read back via the MCP `embersynth.evidence.tail` tool. Never fails
+  // the request.
+  try {
+    const finalStage = planResult.plan.stages[planResult.plan.stages.length - 1];
+    const winnerNode = registry.getById(finalStage.nodeId);
+    const finalCaps = finalStage.capabilities ?? [finalStage.capability];
+    const finalCapNames: string[] = finalCaps as unknown as string[];
+    const candidateNodes = registry
+      .sortByPriority(registry.findByCapabilities(finalCaps))
+      .map((n) => ({
+        nodeId: n.id,
+        score: 1 - n.priority / 100,
+        reasons: [
+          `capabilities:${finalCapNames.filter((c) => (n.capabilities as unknown as string[]).includes(c)).join(',')}`,
+          `priority:${n.priority}`,
+        ],
+      }));
+    appendEvidence({
+      request,
+      winner: winnerNode ? { nodeId: winnerNode.id } : null,
+      candidates: candidateNodes,
+    });
+  } catch {
+    // never fail routing on evidence logging
+  }
 
   try {
     const execStart = Date.now();
