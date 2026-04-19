@@ -171,6 +171,41 @@ curl http://localhost:7777/metrics
 
 Basic health check.
 
+### POST /config/reload
+
+Atomic hot reload of `embersynth.yaml`. Re-reads the resolved config
+path, rebuilds the `NodeRegistry`, starts a fresh `HealthMonitor`,
+and swaps in the new state. On failure the previous registry + health
+state are restored so the server keeps serving with the last-known-good
+config.
+
+Wired at launch when a config file is resolvable (stdin / inline config
+omits the handler — POST returns `503`). Used by the `llamactl` sirius
++ embersynth workload handlers (see K.7 on the llamactl side) to push
+a reload after an upstream edit lands.
+
+Response (200):
+
+```json
+{
+  "ok": true,
+  "configPath": "/path/to/embersynth.yaml",
+  "nodesBefore": 3,
+  "nodesAfter": 3,
+  "profilesBefore": 4,
+  "profilesAfter": 4,
+  "added": ["node-new"],
+  "removed": ["node-retired"],
+  "timestamp": "2026-04-19T21:56:48.928Z"
+}
+```
+
+Rejection (500 + `ok:false`) on YAML parse error or registry mutation
+failure with the error message in the payload. The `fs.watch`-based
+`ConfigWatcher` path (`EMBERSYNTH_WATCH=true` or `config.server.watch:
+true`) goes through the same helper, so a reload triggered by an
+operator editing the file behaves identically to a POST.
+
 ### Response headers
 
 Every completion response includes orchestration metadata:

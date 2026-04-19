@@ -141,6 +141,34 @@ the interface.
 - **Validate on load.** Fail loud with a clear error if a node
   references a missing capability, a profile references an unknown
   tag, or a synthetic model maps to an undefined profile.
+- **Atomic hot reload** lives in `src/config/reload.ts`
+  (`reloadConfigFromDisk`). Both the `ConfigWatcher` (fs.watch) and
+  the `POST /config/reload` endpoint go through this single helper
+  so the two reload paths stay coherent. On rollback the previous
+  registry + health snapshot are restored — the server keeps
+  serving the last-good config rather than entering a
+  half-configured state.
+
+## Reload endpoint contract (cross-repo)
+
+`POST /config/reload` is what the llamactl sirius+embersynth gateway
+workload handler calls after an upstream edit:
+
+```
+POST /config/reload
+Authorization: Bearer <kubeconfig user token>
+Content-Type:  application/json
+Body:          {"source":"llamactl-workload","name":"<workload-name>",
+                "syntheticModel":"fusion-<id>"}
+
+200 → {ok:true, added:[...], removed:[...], nodesBefore, nodesAfter, ...}
+500 → {ok:false, error:"...", ...} — llamactl surfaces as Failed + EmbersynthReloadFailed
+503 → {ok:false} — returned when onReload isn't wired (inline config)
+```
+
+Keep this shape stable. Llamactl's gateway handler parses the
+response body for audit logging; breaking the shape without a
+coordinated bump on the llamactl side will silently drop telemetry.
 
 ## Streaming
 
