@@ -2,6 +2,7 @@
   "name": "embersynth",
   "version": "0.2.0",
   "description": "Local-first distributed AI orchestration runtime",
+  "license": "MIT",
   "type": "module",
   "main": "src/index.ts",
   "scripts": {

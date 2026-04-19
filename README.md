@@ -469,3 +469,7 @@ Part of the llamactl family:
 - **Config-driven**: Nodes, profiles, policies — all in YAML.
 - **Graceful degradation**: Unhealthy nodes are skipped with automatic fallback.
 - **Observable**: Structured JSON logging, metrics endpoint, CLI health tools.
+
+## License
+
+MIT — see [`LICENSE`](./LICENSE).
