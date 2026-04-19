@@ -1,0 +1,21 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(bun test*)",
+      "Bash(bun install*)",
+      "Bash(bun run typecheck*)",
+      "Bash(bun run dev*)",
+      "Bash(bun run start*)",
+      "Bash(bun run cli:*)",
+      "Bash(bun src/mcp/bin/embersynth-mcp.ts*)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git status*)",
+      "Bash(git diff*)",
+      "Bash(git log*)",
+      "Bash(git show:*)",
+      "Bash(gh api:*)",
+      "Bash(gh pr:*)"
+    ]
+  }
+}
