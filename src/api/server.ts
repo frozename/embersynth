@@ -10,8 +10,23 @@ import { handleListTraces, handleGetTrace } from './traces.js';
 import { TraceStore } from '../tracing/store.js';
 import { generateTraceId, createTraceContext } from '../tracing/context.js';
 import { log } from '../logger/index.js';
+import type { ReloadResult } from '../config/reload.js';
 
-export function createServer(config: EmberSynthConfig, registry: NodeRegistry) {
+export interface CreateServerOptions {
+  /**
+   * Optional handler for POST /config/reload. When provided, triggers
+   * an atomic re-read of the config + registry rebuild. Omitted when
+   * the caller doesn't want to expose hot reload (tests, one-shot
+   * tools).
+   */
+  onReload?: () => ReloadResult;
+}
+
+export function createServer(
+  config: EmberSynthConfig,
+  registry: NodeRegistry,
+  opts: CreateServerOptions = {},
+) {
   const traceStore = new TraceStore();
 
   return Bun.serve({
@@ -67,6 +82,28 @@ export function createServer(config: EmberSynthConfig, registry: NodeRegistry) {
               enabled: registry.getEnabled().length,
             },
           });
+        } else if (method === 'POST' && path === '/config/reload') {
+          if (!opts.onReload) {
+            response = Response.json(
+              {
+                ok: false,
+                error: {
+                  message: 'Hot reload not enabled for this server',
+                  type: 'unavailable',
+                },
+              },
+              { status: 503 },
+            );
+          } else {
+            const result = opts.onReload();
+            response = Response.json(
+              {
+                ...result,
+                timestamp: new Date().toISOString(),
+              },
+              { status: result.ok ? 200 : 500 },
+            );
+          }
         } else {
           response = Response.json(
             { error: { message: 'Not found', type: 'invalid_request_error' } },

@@ -1,5 +1,6 @@
 import { loadConfig, resolveConfigPath } from './config/loader.js';
 import { ConfigWatcher } from './config/watcher.js';
+import { reloadConfigFromDisk } from './config/reload.js';
 import { NodeRegistry } from './registry/registry.js';
 import { HealthMonitor } from './health/monitor.js';
 import { createServer } from './api/server.js';
@@ -30,8 +31,27 @@ registry.load(config.nodes);
 let monitor = new HealthMonitor(config, registry);
 monitor.start();
 
-// Start server
-let server = createServer(config, registry);
+// Shared reload context — the POST /config/reload handler and the
+// fs-watching ConfigWatcher both mutate `monitor` via this ref so the
+// two paths stay coherent.
+const monitorRef = { current: monitor };
+
+// Start server with a hot-reload callback bound to the current
+// kubeconfig path (when resolvable). When the path isn't known
+// (stdin/inline config), the endpoint returns 503 unavailable.
+const server = createServer(config, registry, {
+  ...(resolvedConfigPath
+    ? {
+        onReload: () =>
+          reloadConfigFromDisk({
+            configPath: resolvedConfigPath,
+            config,
+            registry,
+            monitorRef,
+          }),
+      }
+    : {}),
+});
 log.info('server started', {
   host: config.server.host,
   port: config.server.port,
@@ -43,30 +63,15 @@ log.info('server started', {
 let watcher: ConfigWatcher | null = null;
 const watchEnabled = process.env.EMBERSYNTH_WATCH === 'true' || config.server.watch === true;
 if (watchEnabled && resolvedConfigPath) {
-  watcher = new ConfigWatcher(resolvedConfigPath, (newConfig) => {
-    const oldNodes = [...registry.getAll()];
-    const healthSnapshot = registry.snapshotHealth();
-    try {
-      registry.load(newConfig.nodes);
-      const newMonitor = new HealthMonitor(newConfig, registry);
-      
-      // Success — swap monitor and config state together
-      Object.assign(config, newConfig);
-      monitor.stop();
-      monitor = newMonitor;
-      monitor.start();
-      
-      log.info('config reloaded successfully', {
-        nodes: newConfig.nodes.length,
-        profiles: newConfig.profiles.length,
-      });
-    } catch (err) {
-      registry.load(oldNodes);
-      registry.restoreHealth(healthSnapshot);
-      log.error('config reload failed, keeping current config', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-    }
+  watcher = new ConfigWatcher(resolvedConfigPath, () => {
+    // Both the watcher + HTTP endpoint go through the same helper so
+    // a reload via fs.watch behaves identically to a POST /config/reload.
+    reloadConfigFromDisk({
+      configPath: resolvedConfigPath,
+      config,
+      registry,
+      monitorRef,
+    });
   });
   watcher.start();
 }
@@ -75,13 +80,13 @@ if (watchEnabled && resolvedConfigPath) {
 process.on('SIGINT', () => {
   log.info('shutting down (SIGINT)');
   watcher?.stop();
-  monitor.stop();
+  monitorRef.current.stop();
   server.stop();
 });
 
 process.on('SIGTERM', () => {
   log.info('shutting down (SIGTERM)');
   watcher?.stop();
-  monitor.stop();
+  monitorRef.current.stop();
   server.stop();
 });
