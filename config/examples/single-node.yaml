@@ -1,0 +1,21 @@
+# Single-node setup — one local reasoning model (e.g. Ollama on localhost)
+
+server:
+  host: "127.0.0.1"
+  port: 7777
+
+nodes:
+  - id: reasoning-local
+    label: "Local Reasoning"
+    endpoint: "http://localhost:11434"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [local, private]
+    providerType: openai-compatible
+    modelId: "llama3"
+    priority: 1
+    auth:
+      type: none
+    timeout:
+      requestMs: 120000

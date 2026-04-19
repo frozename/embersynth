@@ -1,0 +1,46 @@
+# Private-only setup — all nodes tagged private, external nodes excluded
+
+server:
+  host: "127.0.0.1"
+  port: 7777
+
+nodes:
+  - id: reasoning-secure
+    label: "Secure Local Reasoning"
+    endpoint: "http://localhost:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [local, private, airgapped]
+    providerType: openai-compatible
+    modelId: "llama3"
+    priority: 1
+
+  - id: vision-secure
+    label: "Secure Local Vision"
+    endpoint: "http://localhost:8081"
+    transport: http
+    enabled: true
+    capabilities: [vision]
+    tags: [local, private, airgapped]
+    providerType: openai-compatible
+    modelId: "moondream"
+    priority: 5
+
+  # This node will be excluded by the "private" profile because it lacks the private tag
+  - id: reasoning-external
+    label: "External Reasoning"
+    endpoint: "http://10.0.0.50:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [external]
+    providerType: openai-compatible
+    modelId: "mixtral"
+    priority: 50
+
+profiles:
+  - id: private
+    label: "Private"
+    description: "Only nodes tagged private"
+    requiredTags: [private]

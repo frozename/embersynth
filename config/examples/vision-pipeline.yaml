@@ -1,0 +1,42 @@
+# Vision pipeline — vision node feeds evidence to reasoning node
+
+server:
+  host: "127.0.0.1"
+  port: 7777
+
+nodes:
+  - id: vision-node
+    label: "Vision Analyzer"
+    endpoint: "http://localhost:8081"
+    transport: http
+    enabled: true
+    capabilities: [vision]
+    tags: [local, private]
+    providerType: openai-compatible
+    modelId: "llava-v1.6"
+    priority: 1
+    timeout:
+      requestMs: 180000
+    optimization:
+      contextWindow: 4096
+
+  - id: reasoning-node
+    label: "Reasoning Synthesizer"
+    endpoint: "http://localhost:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [local, private]
+    providerType: openai-compatible
+    modelId: "qwen2.5-32b"
+    priority: 1
+    optimization:
+      quantization: "Q4_K_M"
+      contextWindow: 32768
+
+profiles:
+  - id: vision
+    label: "Vision"
+    description: "Full vision pipeline: analyze → synthesize"
+    preferredCapabilities: [vision]
+    synthesisRequired: true

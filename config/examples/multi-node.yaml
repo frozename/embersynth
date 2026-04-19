@@ -1,0 +1,42 @@
+# Multi-node setup — reasoning + vision + LAN fallback
+
+server:
+  host: "127.0.0.1"
+  port: 7777
+
+nodes:
+  - id: reasoning-primary
+    label: "Primary Reasoning"
+    endpoint: "http://localhost:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [local, private, primary]
+    providerType: openai-compatible
+    modelId: "qwen2.5"
+    priority: 1
+
+  - id: vision-local
+    label: "Local Vision"
+    endpoint: "http://localhost:8081"
+    transport: http
+    enabled: true
+    capabilities: [vision]
+    tags: [local, private]
+    providerType: openai-compatible
+    modelId: "llava"
+    priority: 5
+
+  - id: reasoning-fallback
+    label: "LAN Reasoning Fallback"
+    endpoint: "http://192.168.1.50:8080"
+    transport: http
+    enabled: true
+    capabilities: [reasoning]
+    tags: [lan, private]
+    providerType: openai-compatible
+    modelId: "mistral"
+    priority: 20
+    auth:
+      type: bearer
+      token: "${LAN_TOKEN}"

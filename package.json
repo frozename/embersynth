@@ -1,0 +1,31 @@
+{
+  "name": "embersynth",
+  "version": "0.2.0",
+  "description": "Local-first distributed AI orchestration runtime",
+  "type": "module",
+  "main": "src/index.ts",
+  "scripts": {
+    "dev": "bun run --watch src/index.ts",
+    "start": "bun run src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "cli": "bun run src/cli/index.ts",
+    "cli:status": "bun run src/cli/index.ts status",
+    "cli:check": "bun run src/cli/index.ts check-config",
+    "cli:test-node": "bun run src/cli/index.ts test-node",
+    "cli:nodes": "bun run src/cli/index.ts list-nodes",
+    "cli:profiles": "bun run src/cli/index.ts list-profiles",
+    "mcp": "bun run bin/embersynth-mcp.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.2.0",
+    "typescript": "^5.7.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "1.29.0",
+    "@nova/contracts": "file:../nova/packages/contracts",
+    "@nova/mcp-shared": "file:../nova/packages/mcp-shared",
+    "yaml": "^2.7.0",
+    "zod": "^4.3.6"
+  }
+}
