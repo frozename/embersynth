@@ -34,7 +34,7 @@ function baseConfigYaml(): string {
       {
         id: 'agent-local',
         label: 'llamactl agent local',
-        endpoint: 'http://127.0.0.1:8080/v1',
+        endpoint: 'http://127.0.0.1:61999/v1',
         transport: 'http',
         enabled: true,
         capabilities: ['reasoning'],
@@ -345,8 +345,12 @@ describe('@embersynth/mcp health.all', () => {
       worst: 'ok' | 'degraded' | 'down';
     };
     // Only `agent-local` is enabled in the fixture; the endpoint points
-    // at 127.0.0.1:8080 which no test server is listening on, so the
-    // probe ECONNREFUSEDs and the fleet rolls up to `down`.
+    // at 127.0.0.1:61999 — an unassigned high port we assume is free.
+    // (We previously used 8080, but that collides with common dev
+    // servers like ollama / llamactl agents / misc node apps; the
+    // probe would then succeed and the "rolls up to down" assertion
+    // would fail against a reachable unrelated service.) The probe
+    // should ECONNREFUSED and the fleet rolls up to `down`.
     expect(parsed.nodes.length).toBe(1);
     expect(parsed.nodes[0]!.id).toBe('agent-local');
     expect(parsed.nodes[0]!.reachable).toBe(false);
@@ -418,7 +422,7 @@ describe('@embersynth/mcp reload', () => {
           {
             id: 'agent-local',
             label: 'llamactl agent local',
-            endpoint: 'http://127.0.0.1:8080/v1',
+            endpoint: 'http://127.0.0.1:61999/v1',
             transport: 'http',
             enabled: true,
             capabilities: ['reasoning'],
@@ -506,7 +510,7 @@ describe('@embersynth/mcp reload', () => {
           {
             id: 'agent-local',
             label: 'llamactl agent local',
-            endpoint: 'http://127.0.0.1:8080/v1',
+            endpoint: 'http://127.0.0.1:61999/v1',
             transport: 'http',
             enabled: true,
             capabilities: ['reasoning'],
