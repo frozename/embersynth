@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import * as novaContracts from '@nova/contracts';
 import {
   UnifiedAiRequestSchema,
   ChatMessageSchema,
@@ -84,5 +85,16 @@ describe('nova-seam: @nova/contracts import works from embersynth', () => {
     };
     const alsoEmbRes: NovaUnifiedEmbeddingResponse = embRes;
     expect(alsoEmbRes.data[0]!.index).toBe(0);
+  });
+
+  test('P0.2 contract surface: projectUsageRecordV2ToV1 + eof stream completion', () => {
+    // Namespace access so a stale 0.1.x install fails these assertions
+    // instead of failing module link for the whole file.
+    const ns = novaContracts as Record<string, unknown>;
+    expect(typeof ns.projectUsageRecordV2ToV1).toBe('function');
+    const schema = ns.StreamCompletionSchema as
+      | { safeParse?: (v: unknown) => { success: boolean } }
+      | undefined;
+    expect(schema?.safeParse?.('eof').success).toBe(true);
   });
 });

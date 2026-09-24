@@ -146,7 +146,11 @@ function prepareMessages(request: AdapterRequest): ChatMessage[] {
 export class OpenAICompatibleAdapter implements ProviderAdapter {
   readonly type = 'openai-compatible';
 
-  async sendRequest(node: NodeDefinition, request: AdapterRequest): Promise<AdapterResponse> {
+  async sendRequest(
+    node: NodeDefinition,
+    request: AdapterRequest,
+    _signal?: AbortSignal,
+  ): Promise<AdapterResponse> {
     const provider = novaProviderForNode(node);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
@@ -176,6 +180,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   async *sendStreamingRequest(
     node: NodeDefinition,
     request: AdapterRequest,
+    _signal?: AbortSignal,
   ): AsyncGenerator<string> {
     const provider = novaProviderForNode(node);
     const controller = new AbortController();
@@ -210,6 +215,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   async sendEmbeddingRequest(
     node: NodeDefinition,
     request: EmbeddingAdapterRequest,
+    _signal?: AbortSignal,
   ): Promise<EmbeddingAdapterResponse> {
     const provider = novaProviderForNode(node);
     const controller = new AbortController();
@@ -242,7 +248,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     }
   }
 
-  async checkHealth(node: NodeDefinition): Promise<HealthStatus> {
+  async checkHealth(node: NodeDefinition, _signal?: AbortSignal): Promise<HealthStatus> {
     // Nova's createOpenAICompatProvider accepts a healthPath override;
     // pass embersynth's configured /health (or whatever the operator
     // set) so Nova probes the right endpoint. baseUrl still includes

@@ -12,6 +12,13 @@ export interface MockNodeOptions {
   failAfter?: number; // fail after N requests (for testing fallback)
   modelId?: string;
   embeddings?: number[][]; // mock embedding vectors
+  /**
+   * Raw SSE body served for `/v1/chat/completions` requests carrying
+   * `stream: true`. Lets a test script exact frames — including
+   * truncated streams that end without `[DONE]` or a finish_reason.
+   * Non-stream requests keep the canned JSON response.
+   */
+  streamScript?: string;
 }
 
 export interface MockNode {
@@ -85,6 +92,11 @@ export function createMockNode(options?: MockNodeOptions): MockNode {
 
       // POST /v1/chat/completions
       if (method === 'POST' && path === '/v1/chat/completions') {
+        if ((body as { stream?: boolean } | null)?.stream === true && opts.streamScript !== undefined) {
+          return new Response(opts.streamScript, {
+            headers: { 'Content-Type': 'text/event-stream' },
+          });
+        }
         return Response.json({
           id: `chatcmpl-mock-${Date.now()}`,
           object: 'chat.completion',

@@ -28,7 +28,11 @@ export function buildHeaders(node: NodeDefinition): Record<string, string> {
 export class GenericHttpAdapter implements ProviderAdapter {
   readonly type = 'generic-http';
 
-  async sendRequest(node: NodeDefinition, request: AdapterRequest): Promise<AdapterResponse> {
+  async sendRequest(
+    node: NodeDefinition,
+    request: AdapterRequest,
+    _signal?: AbortSignal,
+  ): Promise<AdapterResponse> {
     const url = `${node.endpoint}/generate`;
 
     const body = {
@@ -90,7 +94,7 @@ export class GenericHttpAdapter implements ProviderAdapter {
     }
   }
 
-  async checkHealth(node: NodeDefinition): Promise<HealthStatus> {
+  async checkHealth(node: NodeDefinition, _signal?: AbortSignal): Promise<HealthStatus> {
     const url = `${node.endpoint}${node.health.endpoint ?? '/health'}`;
     const start = Date.now();
 

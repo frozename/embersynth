@@ -198,10 +198,10 @@ export interface EmbeddingAdapterResponse {
 
 export interface ProviderAdapter {
   readonly type: string;
-  sendRequest(node: NodeDefinition, request: AdapterRequest): Promise<AdapterResponse>;
-  sendStreamingRequest?(node: NodeDefinition, request: AdapterRequest): AsyncGenerator<string>;
-  sendEmbeddingRequest?(node: NodeDefinition, request: EmbeddingAdapterRequest): Promise<EmbeddingAdapterResponse>;
-  checkHealth(node: NodeDefinition): Promise<HealthStatus>;
+  sendRequest(node: NodeDefinition, request: AdapterRequest, signal?: AbortSignal): Promise<AdapterResponse>;
+  sendStreamingRequest?(node: NodeDefinition, request: AdapterRequest, signal?: AbortSignal): AsyncGenerator<string>;
+  sendEmbeddingRequest?(node: NodeDefinition, request: EmbeddingAdapterRequest, signal?: AbortSignal): Promise<EmbeddingAdapterResponse>;
+  checkHealth(node: NodeDefinition, signal?: AbortSignal): Promise<HealthStatus>;
 }
 
 // ── Orchestration Result ──
