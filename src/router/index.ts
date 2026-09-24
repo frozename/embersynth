@@ -150,6 +150,7 @@ export async function route(
   config: EmberSynthConfig,
   registry: NodeRegistry,
   traceCtx?: TraceContext,
+  signal?: AbortSignal,
 ): Promise<RouterResult> {
   const profile = resolveProfileFromModel(request.model, config);
   if (!profile) {
@@ -247,6 +248,7 @@ export async function route(
         tools: request.tools,
         toolChoice: request.tool_choice,
       },
+      signal,
     );
 
     traceCtx?.record('execute-complete', {
@@ -278,6 +280,7 @@ export async function routeStreaming(
   config: EmberSynthConfig,
   registry: NodeRegistry,
   traceCtx?: TraceContext,
+  signal?: AbortSignal,
 ): Promise<StreamingRouterResult> {
   const profile = resolveProfileFromModel(request.model, config);
   if (!profile) {
@@ -358,6 +361,7 @@ export async function routeStreaming(
           tools: request.tools,
           toolChoice: request.tool_choice,
         },
+        signal,
       );
       return convertToSSEStream(execResult, request.model);
     }
@@ -378,6 +382,7 @@ export async function routeStreaming(
         tools: request.tools,
         toolChoice: request.tool_choice,
       },
+      signal,
     );
 
     traceCtx?.record('execute-complete', {
@@ -417,6 +422,7 @@ export async function routeStreaming(
           tools: request.tools,
           toolChoice: request.tool_choice,
         },
+        signal,
       );
       return convertToSSEStream(execResult, request.model);
     } catch (fallbackErr) {
@@ -497,6 +503,7 @@ export async function routeEmbedding(
   config: EmberSynthConfig,
   registry: NodeRegistry,
   traceCtx?: TraceContext,
+  signal?: AbortSignal,
 ): Promise<EmbeddingRouterResult> {
   const profile = resolveProfileFromModel(request.model, config);
   if (!profile) {
@@ -559,7 +566,7 @@ export async function routeEmbedding(
     hasAdapterSupport = true;
 
     try {
-      const result = await adapter.sendEmbeddingRequest(node, { input, model: node.modelId });
+      const result = await adapter.sendEmbeddingRequest(node, { input, model: node.modelId }, signal);
       registry.updateHealth(node.id, 'healthy');
       traceCtx?.record('execute-complete', { nodeId: node.id });
       return { ok: true, result, model: request.model, nodeId: node.id };

@@ -32,6 +32,7 @@ export async function executePlan(
     tools?: ChatCompletionRequest['tools'];
     toolChoice?: ChatCompletionRequest['tool_choice'];
   },
+  signal?: AbortSignal,
 ): Promise<OrchestrationResult> {
   const rlog = withRequestId(plan.id);
   const evidence: EvidenceBundle = {
@@ -59,6 +60,7 @@ export async function executePlan(
       failedNodeIds,
       options,
       rlog,
+      signal,
     );
 
     if (!result) {
@@ -109,6 +111,7 @@ export async function executePlanStreaming(
     tools?: ChatCompletionRequest['tools'];
     toolChoice?: ChatCompletionRequest['tool_choice'];
   },
+  signal?: AbortSignal,
 ): Promise<StreamingOrchestrationResult> {
   const rlog = withRequestId(plan.id);
   const evidence: EvidenceBundle = {
@@ -139,6 +142,7 @@ export async function executePlanStreaming(
       failedNodeIds,
       options,
       rlog,
+      signal,
     );
 
     if (!result) {
@@ -203,7 +207,7 @@ export async function executePlanStreaming(
     };
 
     try {
-      const candidateGen = candidateAdapter.sendStreamingRequest(candidateNode, request);
+      const candidateGen = candidateAdapter.sendStreamingRequest(candidateNode, request, signal);
       // Force the first chunk to validate the connection actually works
       const firstResult = await candidateGen.next();
       // Connection validated — store generator and first chunk
@@ -348,6 +352,7 @@ async function executeStageWithFallback(
     toolChoice?: ChatCompletionRequest['tool_choice'];
   },
   rlog?: Log,
+  signal?: AbortSignal,
 ): Promise<StageResult | null> {
   const capability = stage.capability;
   const primaryNodeId = stage.nodeId;
@@ -363,6 +368,7 @@ async function executeStageWithFallback(
     policy,
     options,
     rlog,
+    signal,
   );
 
   if (primaryResult) return primaryResult;
@@ -403,6 +409,7 @@ async function executeStageWithFallback(
       policy,
       options,
       rlog,
+      signal,
     );
 
     if (result) return result;
@@ -429,6 +436,7 @@ async function attemptNode(
     toolChoice?: ChatCompletionRequest['tool_choice'];
   },
   rlog?: Log,
+  signal?: AbortSignal,
 ): Promise<StageResult | null> {
   const node = registry.getById(nodeId);
   if (!node) return null;
@@ -457,7 +465,7 @@ async function attemptNode(
     const stageStart = Date.now();
 
     try {
-      const response = await adapter.sendRequest(node, request);
+      const response = await adapter.sendRequest(node, request, signal);
       const durationMs = Date.now() - stageStart;
       registry.updateHealth(node.id, 'healthy', durationMs);
 

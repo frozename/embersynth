@@ -37,7 +37,7 @@ export async function handleEmbeddings(
   const inputs = Array.isArray(body.input) ? body.input : [body.input];
   traceCtx?.record('classify', { model: body.model, inputs: inputs.length });
 
-  const result = await routeEmbedding(body, config, registry, traceCtx);
+  const result = await routeEmbedding(body, config, registry, traceCtx, req.signal);
 
   if (!result.ok) {
     return Response.json(
