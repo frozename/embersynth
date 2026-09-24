@@ -85,7 +85,7 @@ export async function handleResponses(
       stream: true,
     };
 
-    const result = await routeStreaming(chatReq, config, registry, traceCtx);
+    const result = await routeStreaming(chatReq, config, registry, traceCtx, req.signal);
 
     if (!result.ok) {
       return Response.json(
@@ -249,7 +249,7 @@ export async function handleResponses(
     stream: false,
   };
 
-  const result = await route(chatReq, config, registry, traceCtx);
+  const result = await route(chatReq, config, registry, traceCtx, req.signal);
 
   if (!result.ok) {
     return Response.json(

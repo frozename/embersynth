@@ -59,12 +59,10 @@ beforeAll(() => {
     port: 0,
     async fetch(req: Request): Promise<Response> {
       const url = new URL(req.url);
-      let body: { model?: string; stream?: boolean } | null = null;
-      try {
-        body = (await req.json()) as typeof body;
-      } catch {
-        body = null;
-      }
+      const body = (await req.json().catch(() => null)) as {
+        model?: string;
+        stream?: boolean;
+      } | null;
 
       if (url.pathname === '/v1/chat/completions') {
         if (body?.stream === true) {

@@ -40,7 +40,7 @@ export async function handleCompletions(
 
   // ── Streaming path ──
   if (body.stream) {
-    const result = await routeStreaming(body, config, registry, traceCtx);
+    const result = await routeStreaming(body, config, registry, traceCtx, req.signal);
 
     if (!result.ok) {
       return Response.json(
@@ -62,7 +62,7 @@ export async function handleCompletions(
   }
 
   // ── Non-streaming path ──
-  const result = await route(body, config, registry, traceCtx);
+  const result = await route(body, config, registry, traceCtx, req.signal);
 
   if (!result.ok) {
     return Response.json(

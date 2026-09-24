@@ -1,5 +1,7 @@
-import { createOpenAICompatProvider } from '@nova/contracts';
-import type { OpenAICompatUsageSnapshot } from '@nova/contracts';
+// Namespace import (not named) so a stale @nova/contracts 0.1.x
+// install degrades to `undefined` members we can detect — a named
+// import of a missing export is a module-link failure at boot.
+import * as nova from '@nova/contracts';
 import { appendUsageBackground } from '@nova/mcp-shared';
 import type {
   ProviderAdapter,
@@ -14,29 +16,50 @@ import type {
 import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER } from './stream-markers.js';
 
 /**
- * Default onUsage handler — append the per-call token usage to the
- * family-wide JSONL sink. Fire-and-forget via queueMicrotask inside
- * appendUsageBackground; errors swallowed so a full disk can't
- * disturb the response path. Disabled when $EMBERSYNTH_DISABLE_USAGE
- * is set (tests or strict no-IO deployments).
+ * Default onUsageObservation handler — append the per-attempt token
+ * usage to the family-wide JSONL sink. Nova fires exactly one
+ * observation per call/stream attempt carrying only the counts the
+ * upstream actually reported; we build a UsageRecordV2 in memory and
+ * append ONLY the non-null `projectUsageRecordV2ToV1` result, so
+ * unknown or partially-observed usage never becomes a fabricated
+ * zero-filled row.
+ *
+ * V2 rows themselves are never appended — the V2 sink is a tracked
+ * follow-up (P0.2 registrar seam).
+ *
+ * Fire-and-forget via queueMicrotask inside appendUsageBackground;
+ * errors swallowed so a full disk can't disturb the response path.
+ * Disabled when $EMBERSYNTH_DISABLE_USAGE is set (tests or strict
+ * no-IO deployments).
  */
-function defaultOnUsage(node: NodeDefinition): ((s: OpenAICompatUsageSnapshot) => void) | undefined {
+function defaultOnUsageObservation(
+  node: NodeDefinition,
+): nova.OpenAICompatOnUsageObservation | undefined {
   if (process.env.EMBERSYNTH_DISABLE_USAGE) return undefined;
+  const project = (nova as { projectUsageRecordV2ToV1?: (r: nova.UsageRecordV2) => nova.UsageRecord | null })
+    .projectUsageRecordV2ToV1;
+  if (typeof project !== 'function') {
+    throw new Error(
+      '@nova/contracts >= 0.2.0 required: projectUsageRecordV2ToV1 is not exported (stale 0.1.x install?)',
+    );
+  }
   return (snapshot) => {
+    const recordV2: nova.UsageRecordV2 = {
+      v: 2,
+      ts: new Date().toISOString(),
+      provider: snapshot.provider,
+      model: snapshot.model,
+      kind: snapshot.kind,
+      latency_ms: snapshot.latency_ms,
+      observation: snapshot.observation,
+      route: `embersynth:${node.id}`,
+      ...(snapshot.request_id !== undefined ? { request_id: snapshot.request_id } : {}),
+      ...(snapshot.attempt_id !== undefined ? { attempt_id: snapshot.attempt_id } : {}),
+    };
+    const v1 = project(recordV2);
+    if (v1 === null) return;
     queueMicrotask(() => {
-      appendUsageBackground({
-        record: {
-          ts: new Date().toISOString(),
-          provider: snapshot.provider,
-          model: snapshot.model,
-          kind: snapshot.kind,
-          prompt_tokens: snapshot.prompt_tokens,
-          completion_tokens: snapshot.completion_tokens,
-          total_tokens: snapshot.total_tokens,
-          latency_ms: snapshot.latency_ms,
-          route: `embersynth:${node.id}`,
-        },
-      });
+      appendUsageBackground({ record: v1 });
     });
   };
 }
@@ -61,22 +84,41 @@ function defaultOnUsage(node: NodeDefinition): ((s: OpenAICompatUsageSnapshot) =
 function novaProviderForNode(
   node: NodeDefinition,
   overrides?: { healthPath?: string; skipUsage?: boolean },
-): ReturnType<typeof createOpenAICompatProvider> {
+): ReturnType<typeof nova.createOpenAICompatProvider> {
   const baseUrl = `${node.endpoint}/v1`;
   const token = node.auth.type === 'bearer' ? node.auth.token ?? '' : '';
   const extraHeaders: Record<string, string> = {};
   if (node.auth.type === 'header' && node.auth.headerName && node.auth.headerValue) {
     extraHeaders[node.auth.headerName] = node.auth.headerValue;
   }
-  const onUsage = overrides?.skipUsage ? undefined : defaultOnUsage(node);
-  return createOpenAICompatProvider({
+  const onUsageObservation = overrides?.skipUsage ? undefined : defaultOnUsageObservation(node);
+  return nova.createOpenAICompatProvider({
     name: node.id,
     baseUrl,
     apiKey: token,
     ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
     ...(overrides?.healthPath ? { healthPath: overrides.healthPath } : {}),
-    ...(onUsage ? { onUsage } : {}),
+    ...(onUsageObservation ? { onUsageObservation } : {}),
   });
+}
+
+/**
+ * Merge the caller's abort signal with the per-node request timeout
+ * so either one cancels the upstream fetch. Returns the combined
+ * signal plus a cancel() that disarms the timer.
+ */
+function mergedRequestSignal(
+  timeoutMs: number,
+  callerSignal?: AbortSignal,
+): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  return {
+    signal: callerSignal
+      ? AbortSignal.any([callerSignal, controller.signal])
+      : controller.signal,
+    cancel: () => clearTimeout(timeoutId),
+  };
 }
 
 /** Shape AdapterRequest into Nova's UnifiedAiRequest. Applies
@@ -86,7 +128,7 @@ function toNovaRequest(
   node: NodeDefinition,
   request: AdapterRequest,
   stream: boolean,
-): import('@nova/contracts').UnifiedAiRequest {
+): nova.UnifiedAiRequest {
   const messages = prepareMessages(request);
   return {
     model: node.modelId ?? 'default',
@@ -149,13 +191,15 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
   async sendRequest(
     node: NodeDefinition,
     request: AdapterRequest,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<AdapterResponse> {
     const provider = novaProviderForNode(node);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
+    const reqSignal = mergedRequestSignal(node.timeout.requestMs ?? 120_000, signal);
     try {
-      const novaRes = await provider.createResponse(toNovaRequest(node, request, false));
+      const novaRes = await provider.createResponse(
+        toNovaRequest(node, request, false),
+        { signal: reqSignal.signal },
+      );
       const choice = novaRes.choices[0];
       const content = choice?.message?.content;
       const contentStr = typeof content === 'string' ? content : '';
@@ -173,20 +217,20 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         raw: novaRes,
       };
     } finally {
-      clearTimeout(timeoutId);
+      reqSignal.cancel();
     }
   }
 
   async *sendStreamingRequest(
     node: NodeDefinition,
     request: AdapterRequest,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): AsyncGenerator<string> {
     const provider = novaProviderForNode(node);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
+    const reqSignal = mergedRequestSignal(node.timeout.requestMs ?? 120_000, signal);
+    let sawDone = false;
     try {
-      const stream = provider.streamResponse!(toNovaRequest(node, request, true), controller.signal);
+      const stream = provider.streamResponse!(toNovaRequest(node, request, true), reqSignal.signal);
       for await (const event of stream) {
         if (event.type === 'chunk') {
           const choice = event.chunk.choices[0];
@@ -202,29 +246,41 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         } else if (event.type === 'error') {
           throw new Error(`Node ${node.id} returned ${event.error.code ?? ''}: ${event.error.message}`);
         } else if (event.type === 'done') {
-          // Nova's `done` carries the finish_reason for consumers that
-          // want a terminal marker; embersynth's chunk-level emission
-          // above already covers this for tool_calls / stop. No-op.
+          sawDone = true;
+          // A truncated stream (transport EOF without [DONE] /
+          // finish_reason) must not masquerade as a completed
+          // response — e.g. a tool_call cut mid-arguments would
+          // otherwise surface as a valid 'stop'.
+          if (event.completion !== 'upstream') {
+            throw new Error(
+              `Node ${node.id} stream ended without upstream completion (completion=${event.completion ?? 'absent'})`,
+            );
+          }
         }
       }
+      if (!sawDone) {
+        throw new Error(`Node ${node.id} stream ended without a done event`);
+      }
     } finally {
-      clearTimeout(timeoutId);
+      reqSignal.cancel();
     }
   }
 
   async sendEmbeddingRequest(
     node: NodeDefinition,
     request: EmbeddingAdapterRequest,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<EmbeddingAdapterResponse> {
     const provider = novaProviderForNode(node);
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
+    const reqSignal = mergedRequestSignal(node.timeout.requestMs ?? 120_000, signal);
     try {
-      const res = await provider.createEmbeddings!({
-        model: node.modelId ?? 'default',
-        input: request.input,
-      });
+      const res = await provider.createEmbeddings!(
+        {
+          model: node.modelId ?? 'default',
+          input: request.input,
+        },
+        { signal: reqSignal.signal },
+      );
       const embeddings = res.data
         // Nova's embedding row allows number[] | string (base64). Embersynth
         // adapters consume numeric vectors only; if a provider returns
@@ -244,7 +300,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
       // health tracking keeps the existing failure shape.
       throw err instanceof Error ? err : new Error(String(err));
     } finally {
-      clearTimeout(timeoutId);
+      reqSignal.cancel();
     }
   }
 

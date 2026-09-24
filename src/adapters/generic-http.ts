@@ -31,7 +31,7 @@ export class GenericHttpAdapter implements ProviderAdapter {
   async sendRequest(
     node: NodeDefinition,
     request: AdapterRequest,
-    _signal?: AbortSignal,
+    signal?: AbortSignal,
   ): Promise<AdapterResponse> {
     const url = `${node.endpoint}/generate`;
 
@@ -65,13 +65,16 @@ export class GenericHttpAdapter implements ProviderAdapter {
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.timeout.requestMs ?? 120_000);
+    const fetchSignal = signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal;
 
     try {
       const response = await fetch(url, {
         method: 'POST',
         headers,
         body: JSON.stringify(body),
-        signal: controller.signal,
+        signal: fetchSignal,
       });
 
       if (!response.ok) {
@@ -94,18 +97,21 @@ export class GenericHttpAdapter implements ProviderAdapter {
     }
   }
 
-  async checkHealth(node: NodeDefinition, _signal?: AbortSignal): Promise<HealthStatus> {
+  async checkHealth(node: NodeDefinition, signal?: AbortSignal): Promise<HealthStatus> {
     const url = `${node.endpoint}${node.health.endpoint ?? '/health'}`;
     const start = Date.now();
 
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), node.health.timeoutMs ?? 5_000);
+    const fetchSignal = signal
+      ? AbortSignal.any([signal, controller.signal])
+      : controller.signal;
 
     try {
       const response = await fetch(url, {
         method: 'GET',
         headers: buildHeaders(node),
-        signal: controller.signal,
+        signal: fetchSignal,
       });
 
       return {
