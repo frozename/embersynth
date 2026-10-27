@@ -24,8 +24,8 @@
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "1.29.0",
-    "@nova/contracts": "file:../nova/packages/contracts",
-    "@nova/mcp-shared": "file:../nova/packages/mcp-shared",
+    "@nova/contracts": "npm:@novaproto/contracts@0.2.0",
+    "@nova/mcp-shared": "npm:@novaproto/mcp-shared@0.2.0",
     "yaml": "^2.7.0",
     "zod": "^4.3.6"
   }

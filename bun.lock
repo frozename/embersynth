@@ -6,8 +6,8 @@
       "name": "embersynth",
       "dependencies": {
         "@modelcontextprotocol/sdk": "1.29.0",
-        "@nova/contracts": "file:../nova/packages/contracts",
-        "@nova/mcp-shared": "file:../nova/packages/mcp-shared",
+        "@nova/contracts": "npm:@novaproto/contracts@0.2.0",
+        "@nova/mcp-shared": "npm:@novaproto/mcp-shared@0.2.0",
         "yaml": "^2.7.0",
         "zod": "^4.3.6",
       },
@@ -22,9 +22,11 @@
 
     "@modelcontextprotocol/sdk": ["@modelcontextprotocol/sdk@1.29.0", "", { "dependencies": { "@hono/node-server": "^1.19.9", "ajv": "^8.17.1", "ajv-formats": "^3.0.1", "content-type": "^1.0.5", "cors": "^2.8.5", "cross-spawn": "^7.0.5", "eventsource": "^3.0.2", "eventsource-parser": "^3.0.0", "express": "^5.2.1", "express-rate-limit": "^8.2.1", "hono": "^4.11.4", "jose": "^6.1.3", "json-schema-typed": "^8.0.2", "pkce-challenge": "^5.0.0", "raw-body": "^3.0.0", "zod": "^3.25 || ^4.0", "zod-to-json-schema": "^3.25.1" }, "peerDependencies": { "@cfworker/json-schema": "^4.1.1" }, "optionalPeers": ["@cfworker/json-schema"] }, "sha512-zo37mZA9hJWpULgkRpowewez1y6ML5GsXJPY8FI0tBBCd77HEvza4jDqRKOXgHNn867PVGCyTdzqpz0izu5ZjQ=="],
 
-    "@nova/contracts": ["@nova/contracts@file:../nova/packages/contracts", { "dependencies": { "zod": "^4.3.6" }, "devDependencies": { "@types/bun": "^1.3.12", "typescript": "^5.9.3" } }],
+    "@nova/contracts": ["@novaproto/contracts@0.2.0", "", { "dependencies": { "zod": "^4.3.6" } }, "sha512-tuY8uJEY+KNbCY8HVezdAXmtukIYrSnQ2IhnD+BLIalOBex1/XfSLhXVY3E9HXGzp0/RfOMWqpX4TUkgLOY19A=="],
 
-    "@nova/mcp-shared": ["@nova/mcp-shared@file:../nova/packages/mcp-shared", { "devDependencies": { "@types/bun": "^1.3.12", "typescript": "^5.9.3" } }],
+    "@nova/mcp-shared": ["@novaproto/mcp-shared@0.2.0", "", { "dependencies": { "@novaproto/contracts": "0.2.0", "yaml": "^2.7.0" } }, "sha512-8cYSlsHI6jQAkrq7eoPQwBLx/MIQ17VtdlfzPu0mIfETW+JwiRLo0xYpQekhRrIB0SGChiWc19WYUyPJExTUCQ=="],
+
+    "@novaproto/contracts": ["@novaproto/contracts@0.2.0", "", { "dependencies": { "zod": "^4.3.6" } }, "sha512-tuY8uJEY+KNbCY8HVezdAXmtukIYrSnQ2IhnD+BLIalOBex1/XfSLhXVY3E9HXGzp0/RfOMWqpX4TUkgLOY19A=="],
 
     "@types/bun": ["@types/bun@1.3.11", "", { "dependencies": { "bun-types": "1.3.11" } }, "sha512-5vPne5QvtpjGpsGYXiFyycfpDF2ECyPcTSsFBMa0fraoxiQyMJ3SmuQIGhzPg2WJuWxVBoxWJ2kClYTcw/4fAg=="],
 
@@ -215,13 +217,5 @@
     "zod": ["zod@4.3.6", "", {}, "sha512-rftlrkhHZOcjDwkGlnUtZZkvaPHCsDATp4pGpuOOMDaTdDDXF91wuVDJoWoPsKX/3YPQ5fHuF3STjcYyKr+Qhg=="],
 
     "zod-to-json-schema": ["zod-to-json-schema@3.25.2", "", { "peerDependencies": { "zod": "^3.25.28 || ^4" } }, "sha512-O/PgfnpT1xKSDeQYSCfRI5Gy3hPf91mKVDuYLUHZJMiDFptvP41MSnWofm8dnCm0256ZNfZIM7DSzuSMAFnjHA=="],
-
-    "@nova/contracts/@types/bun": ["@types/bun@1.3.12", "", { "dependencies": { "bun-types": "1.3.12" } }, "sha512-DBv81elK+/VSwXHDlnH3Qduw+KxkTIWi7TXkAeh24zpi5l0B2kUg9Ga3tb4nJaPcOFswflgi/yAvMVBPrxMB+A=="],
-
-    "@nova/mcp-shared/@types/bun": ["@types/bun@1.3.12", "", { "dependencies": { "bun-types": "1.3.12" } }, "sha512-DBv81elK+/VSwXHDlnH3Qduw+KxkTIWi7TXkAeh24zpi5l0B2kUg9Ga3tb4nJaPcOFswflgi/yAvMVBPrxMB+A=="],
-
-    "@nova/contracts/@types/bun/bun-types": ["bun-types@1.3.12", "", { "dependencies": { "@types/node": "*" } }, "sha512-HqOLj5PoFajAQciOMRiIZGNoKxDJSr6qigAttOX40vJuSp6DN/CxWp9s3C1Xwm4oH7ybueITwiaOcWXoYVoRkA=="],
-
-    "@nova/mcp-shared/@types/bun/bun-types": ["bun-types@1.3.12", "", { "dependencies": { "@types/node": "*" } }, "sha512-HqOLj5PoFajAQciOMRiIZGNoKxDJSr6qigAttOX40vJuSp6DN/CxWp9s3C1Xwm4oH7ybueITwiaOcWXoYVoRkA=="],
   }
 }
