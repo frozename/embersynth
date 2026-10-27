@@ -24,7 +24,7 @@ stage.
 - **Language**: TypeScript 5.7+, strict, `"type": "module"`.
 - **Validation**: Zod 4 (for config + request shapes).
 - **Config**: YAML (`embersynth.yaml`, searched in precedence).
-- **Nova**: `@nova/contracts` + `@nova/mcp-shared` via `file:`.
+- **Nova**: `@nova/contracts` + `@nova/mcp-shared` via pinned npm aliases to `@novaproto/*`.
 
 ## Layout
 
@@ -194,7 +194,7 @@ with llamactl + sirius.
 Depends on Nova. After a Nova schema change or adapter fix:
 
 ```bash
-bun install      # refresh file: lockfile
+bun install      # refresh lockfile after updating pinned Nova versions
 bun test         # must stay green
 bun run typecheck
 ```
