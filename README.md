@@ -1,5 +1,9 @@
 # EmberSynth
 
+<p align="center">
+  <img src="./.github/branding/logo.png" alt="EmberSynth logo" width="640" />
+</p>
+
 Local-first distributed AI orchestration runtime. Exposes multiple heterogeneous AI/model/service nodes as a single virtual model API.
 
 ## What it does
