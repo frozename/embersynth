@@ -136,6 +136,21 @@ export function resolveConfigPath(configPath?: string): string | undefined {
   return CONFIG_PATHS.find((p) => existsSync(p));
 }
 
+/**
+ * #13: carry the optional server.logLevel and server.watch keys across from
+ * the YAML file. A key that is absent (or has an unusable value) stays absent.
+ * watch also accepts the string 'true' that ${VAR:-true} interpolation yields.
+ */
+function optionalServerFields(
+  serverRaw: Record<string, unknown>,
+): Pick<EmberSynthConfig['server'], 'logLevel' | 'watch'> {
+  const fields: Pick<EmberSynthConfig['server'], 'logLevel' | 'watch'> = {};
+  const logLevel = serverRaw.logLevel;
+  if (typeof logLevel === 'string') fields.logLevel = logLevel;
+  if (serverRaw.watch === true || serverRaw.watch === 'true') fields.watch = true;
+  return fields;
+}
+
 export function loadConfig(configPath?: string): EmberSynthConfig {
   if (configPath && !existsSync(configPath)) {
     throw new Error(`Config file not found: ${configPath}`);
@@ -164,6 +179,7 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
     server: {
       host: envHost ?? (serverRaw.host as string) ?? DEFAULT_CONFIG.server.host,
       port: envPort ? num(parseInt(envPort, 10), DEFAULT_CONFIG.server.port) : num(serverRaw.port, DEFAULT_CONFIG.server.port),
+      ...optionalServerFields(serverRaw),
     },
     nodes: rawConfig?.nodes
       ? (rawConfig.nodes as Record<string, unknown>[]).map(normalizeNode)
