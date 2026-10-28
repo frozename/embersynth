@@ -13,7 +13,7 @@ import type { NodeRegistry } from '../registry/registry.js';
 import type { TraceContext } from '../tracing/context.js';
 import { classifyRequest } from './classifier.js';
 import { buildPlan } from './planner.js';
-import { executePlan, executePlanStreaming } from './executor.js';
+import { executePlan, executePlanStreaming, StageExecutionError } from './executor.js';
 import { resolveProfileFromModel } from '../config/loader.js';
 import { getAdapter } from '../adapters/index.js';
 import { log } from '../logger/index.js';
@@ -411,6 +411,22 @@ export async function routeStreaming(
     return { ok: true, result };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
+    // #12: a failed intermediate stage or a caller cancel must not be answered by
+    // rerunning only the final stage without the evidence that stage needed.
+    if (err instanceof StageExecutionError || signal?.aborted) {
+      log.error('streaming execution failed', {
+        planId: planResult.plan.id,
+        error: message,
+      });
+      traceCtx?.record('error', { message });
+      return {
+        ok: false,
+        error: {
+          status: 502,
+          message,
+        },
+      };
+    }
     log.error('streaming execution failed, retrying final stage non-streaming', {
       error: message,
     });
