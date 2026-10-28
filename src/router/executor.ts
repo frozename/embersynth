@@ -215,7 +215,9 @@ export async function executePlanStreaming(
       streamFirstChunk = firstResult.done ? null : firstResult.value;
       streamNodeId = candidateId;
       break;
-    } catch {
+    } catch (err) {
+      // #8: a caller cancel is not a node failure; stop without touching health.
+      if (signal?.aborted) throw err;
       failedStreamNodes.add(candidateId);
       registry.updateHealth(candidateId, 'unhealthy');
       rlog.warn('streaming candidate failed, trying next', { nodeId: candidateId });
@@ -497,6 +499,11 @@ async function attemptNode(
 
       return { response, nodeId, durationMs };
     } catch (err) {
+      // #8: the caller's own signal fired (client disconnect or upstream
+      // cancel). That is not a node failure: no health update, no retry,
+      // no fallback. A per-node timeout aborts the adapter's merged signal,
+      // not this one, so it still counts as a failure below.
+      if (signal?.aborted) throw err;
       const errMsg = err instanceof Error ? err.message : String(err);
       registry.updateHealth(node.id, 'unhealthy', undefined, errMsg);
 
