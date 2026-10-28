@@ -1,4 +1,7 @@
-import { describe, test, expect } from 'bun:test';
+import { describe, test, expect, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { loadConfig, resolveProfileFromModel } from '../src/config/loader.js';
 
 describe('config loading', () => {
@@ -86,5 +89,58 @@ describe('profile resolution', () => {
     const profile = resolveProfileFromModel('fusion-fast', config);
     expect(profile).not.toBeNull();
     expect(profile!.maxStages).toBe(1);
+  });
+});
+
+describe('server.watch and server.logLevel from the YAML file (#13)', () => {
+  let tempDir = '';
+
+  afterEach(() => {
+    if (tempDir !== '') {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = '';
+    }
+  });
+
+  function writeConfig(body: string): string {
+    tempDir = mkdtempSync(join(tmpdir(), 'es-config-13-'));
+    const configPath = join(tempDir, 'embersynth.yaml');
+    writeFileSync(configPath, body);
+    return configPath;
+  }
+
+  test('keeps server.watch: true and server.logLevel: debug', () => {
+    const configPath = writeConfig('server:\n  host: 127.0.0.1\n  port: 7777\n  watch: true\n  logLevel: debug\n');
+    const config = loadConfig(configPath);
+    expect(config.server.watch).toBe(true);
+    expect(config.server.logLevel).toBe('debug');
+  });
+
+  test('leaves watch and logLevel absent when the keys are not set', () => {
+    const configPath = writeConfig('server:\n  host: 127.0.0.1\n  port: 7777\n');
+    const config = loadConfig(configPath);
+    expect(config.server.watch).toBeUndefined();
+    expect(config.server.logLevel).toBeUndefined();
+    expect(Object.keys(config.server).sort()).toEqual(['host', 'port']);
+  });
+
+  test('accepts watch as the string true produced by env interpolation', () => {
+    const previous = process.env.ES13_UNSET_WATCH;
+    try {
+      Reflect.deleteProperty(process.env, 'ES13_UNSET_WATCH');
+      const configPath = writeConfig('server:\n  watch: "${ES13_UNSET_WATCH:-true}"\n');
+      const config = loadConfig(configPath);
+      expect(config.server.watch).toBe(true);
+    } finally {
+      if (previous !== undefined) process.env.ES13_UNSET_WATCH = previous;
+      else Reflect.deleteProperty(process.env, 'ES13_UNSET_WATCH');
+    }
+  });
+
+  test('does not turn watch: "false" or a non-string logLevel into a value', () => {
+    const configPath = writeConfig('server:\n  watch: "false"\n  logLevel: 42\n');
+    const config = loadConfig(configPath);
+    expect(config.server.watch).toBeUndefined();
+    expect(config.server.logLevel).toBeUndefined();
   });
 });
