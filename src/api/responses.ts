@@ -100,132 +100,154 @@ export async function handleResponses(
     const created = Math.floor(Date.now() / 1000);
     const encoder = new TextEncoder();
 
-    const transformedStream = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        // Send response.created event
-        controller.enqueue(encoder.encode(
-          `event: response.created\ndata: ${JSON.stringify({ id: responseId, object: 'response', created_at: created, model: body.model, output: [] })}\n\n`
-        ));
+    const upstream = result.result.stream;
 
-        // Send output_item.added
-        controller.enqueue(encoder.encode(
-          `event: response.output_item.added\ndata: ${JSON.stringify({ type: 'message', id: msgId, role: 'assistant', content: [] })}\n\n`
-        ));
+    // #3: produce events lazily and hand them out from pull(), so the queue is
+    // empty whenever an upstream truncation errors the body. Erroring a
+    // ReadableStream discards queued chunks, which used to drop response.created.
+    const produceEvents = async function* (): AsyncGenerator<Uint8Array> {
+      // Send response.created event
+      yield encoder.encode(
+        `event: response.created\ndata: ${JSON.stringify({ id: responseId, object: 'response', created_at: created, model: body.model, output: [] })}\n\n`
+      );
 
-        // Read the underlying SSE stream and re-emit as Responses events
-        const reader = result.result.stream.getReader();
-        const decoder = new TextDecoder();
-        let fullContent = '';
-        let sseBuffer = '';
-        const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
+      // Send output_item.added
+      yield encoder.encode(
+        `event: response.output_item.added\ndata: ${JSON.stringify({ type: 'message', id: msgId, role: 'assistant', content: [] })}\n\n`
+      );
 
-        try {
-          while (true) {
-            const { done, value } = await reader.read();
-            if (done) break;
+      // Read the underlying SSE stream and re-emit as Responses events
+      const reader = upstream.getReader();
+      const decoder = new TextDecoder();
+      let fullContent = '';
+      let sseBuffer = '';
+      const toolCallMap = new Map<number, { id: string; name: string; arguments: string }>();
 
-            sseBuffer += decoder.decode(value, { stream: true });
-            const lines = sseBuffer.split('\n');
-            sseBuffer = lines.pop() ?? ''; // keep incomplete line in buffer
+      try {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
 
-            for (const line of lines) {
-              const trimmed = line.trim();
-              if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
-              try {
-                const chunk = JSON.parse(trimmed.slice(6));
-                const choice = chunk.choices?.[0];
-                const delta = choice?.delta?.content;
-                if (delta) {
-                  fullContent += delta;
-                  controller.enqueue(encoder.encode(
-                    `event: response.output_text.delta\ndata: ${JSON.stringify({ delta })}\n\n`
-                  ));
-                }
+          sseBuffer += decoder.decode(value, { stream: true });
+          const lines = sseBuffer.split('\n');
+          sseBuffer = lines.pop() ?? ''; // keep incomplete line in buffer
 
-                const toolCalls = choice?.delta?.tool_calls;
-                if (toolCalls) {
-                  for (const tc of toolCalls) {
-                    if (!toolCallMap.has(tc.index) && tc.id && tc.function?.name) {
-                      toolCallMap.set(tc.index, { id: tc.id, name: tc.function.name, arguments: '' });
-                      controller.enqueue(encoder.encode(
-                        `event: response.output_item.added\ndata: ${JSON.stringify({
-                          type: 'function_call',
-                          id: tc.id,
-                          call_id: tc.id,
-                          name: tc.function.name,
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (!trimmed.startsWith('data: ') || trimmed === 'data: [DONE]') continue;
+            try {
+              const chunk = JSON.parse(trimmed.slice(6));
+              const choice = chunk.choices?.[0];
+              const delta = choice?.delta?.content;
+              if (delta) {
+                fullContent += delta;
+                yield encoder.encode(
+                  `event: response.output_text.delta\ndata: ${JSON.stringify({ delta })}\n\n`
+                );
+              }
+
+              const toolCalls = choice?.delta?.tool_calls;
+              if (toolCalls) {
+                for (const tc of toolCalls) {
+                  if (!toolCallMap.has(tc.index) && tc.id && tc.function?.name) {
+                    toolCallMap.set(tc.index, { id: tc.id, name: tc.function.name, arguments: '' });
+                    yield encoder.encode(
+                      `event: response.output_item.added\ndata: ${JSON.stringify({
+                        type: 'function_call',
+                        id: tc.id,
+                        call_id: tc.id,
+                        name: tc.function.name,
+                      })}\n\n`
+                    );
+                  }
+                  if (tc.function?.arguments) {
+                    const entry = toolCallMap.get(tc.index);
+                    if (entry) {
+                      entry.arguments += tc.function.arguments;
+                      yield encoder.encode(
+                        `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({
+                          call_id: entry.id,
+                          delta: tc.function.arguments,
                         })}\n\n`
-                      ));
-                    }
-                    if (tc.function?.arguments) {
-                      const entry = toolCallMap.get(tc.index);
-                      if (entry) {
-                        entry.arguments += tc.function.arguments;
-                        controller.enqueue(encoder.encode(
-                          `event: response.function_call_arguments.delta\ndata: ${JSON.stringify({
-                            call_id: entry.id,
-                            delta: tc.function.arguments,
-                          })}\n\n`
-                        ));
-                      }
+                      );
                     }
                   }
                 }
-              } catch { /* skip malformed chunks */ }
-            }
+              }
+            } catch { /* skip malformed chunks */ }
           }
+        }
 
-          // Send completion events
-          for (const [, tc] of toolCallMap) {
-            controller.enqueue(encoder.encode(
-              `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
-                call_id: tc.id,
-                arguments: tc.arguments,
-              })}\n\n`
-            ));
-            controller.enqueue(encoder.encode(
-              `event: response.output_item.done\ndata: ${JSON.stringify({
-                type: 'function_call',
-                id: tc.id,
-                call_id: tc.id,
-                name: tc.name,
-                arguments: tc.arguments,
-              })}\n\n`
-            ));
-          }
-
-          controller.enqueue(encoder.encode(
-            `event: response.output_text.done\ndata: ${JSON.stringify({ text: fullContent })}\n\n`
-          ));
-
-          const outputContent: any[] = [];
-          if (fullContent) {
-            outputContent.push({ type: 'output_text', text: fullContent });
-          }
-          for (const [, tc] of toolCallMap) {
-            outputContent.push({
+        // Send completion events
+        for (const [, tc] of toolCallMap) {
+          yield encoder.encode(
+            `event: response.function_call_arguments.done\ndata: ${JSON.stringify({
+              call_id: tc.id,
+              arguments: tc.arguments,
+            })}\n\n`
+          );
+          yield encoder.encode(
+            `event: response.output_item.done\ndata: ${JSON.stringify({
               type: 'function_call',
               id: tc.id,
               call_id: tc.id,
               name: tc.name,
               arguments: tc.arguments,
-            });
-          }
-          if (outputContent.length === 0) {
-            outputContent.push({ type: 'output_text', text: '' });
-          }
-
-          controller.enqueue(encoder.encode(
-            `event: response.completed\ndata: ${JSON.stringify({
-              id: responseId, object: 'response', created_at: created, model: body.model,
-              output: [{ type: 'message', id: msgId, role: 'assistant', content: outputContent }],
             })}\n\n`
-          ));
-          controller.close();
+          );
+        }
+
+        yield encoder.encode(
+          `event: response.output_text.done\ndata: ${JSON.stringify({ text: fullContent })}\n\n`
+        );
+
+        const outputContent: any[] = [];
+        if (fullContent) {
+          outputContent.push({ type: 'output_text', text: fullContent });
+        }
+        for (const [, tc] of toolCallMap) {
+          outputContent.push({
+            type: 'function_call',
+            id: tc.id,
+            call_id: tc.id,
+            name: tc.name,
+            arguments: tc.arguments,
+          });
+        }
+        if (outputContent.length === 0) {
+          outputContent.push({ type: 'output_text', text: '' });
+        }
+
+        yield encoder.encode(
+          `event: response.completed\ndata: ${JSON.stringify({
+            id: responseId, object: 'response', created_at: created, model: body.model,
+            output: [{ type: 'message', id: msgId, role: 'assistant', content: outputContent }],
+          })}\n\n`
+        );
+      } finally {
+        reader.releaseLock();
+      }
+    };
+
+    const events = produceEvents();
+    const transformedStream = new ReadableStream<Uint8Array>({
+      // One event per pull: pull() only runs when the queue has room, so an
+      // upstream error reaches controller.error() after the earlier events.
+      async pull(controller) {
+        try {
+          const next = await events.next();
+          if (next.done) {
+            controller.close();
+          } else {
+            controller.enqueue(next.value);
+          }
         } catch (err) {
           controller.error(err);
-        } finally {
-          reader.releaseLock();
         }
+      },
+      async cancel(reason) {
+        await events.return(undefined);
+        await upstream.cancel(reason).catch(() => {});
       },
     });
 
