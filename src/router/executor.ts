@@ -19,6 +19,20 @@ import { TOOL_CALLS_MARKER, FINISH_REASON_MARKER, mergeToolCallDeltas, type Tool
 import { compressEvidence } from '../evidence/compressor.js';
 import { withRequestId } from '../logger/index.js';
 
+/**
+ * Thrown by executePlanStreaming when a non-final stage fails, so routeStreaming
+ * can tell it apart from a failure of the final-stage stream (#12).
+ */
+export class StageExecutionError extends Error {
+  readonly stageIndex: number;
+
+  constructor(stageIndex: number, message: string) {
+    super(message);
+    this.name = 'StageExecutionError';
+    this.stageIndex = stageIndex;
+  }
+}
+
 /** Execute a plan stage by stage, building up evidence */
 export async function executePlan(
   plan: ExecutionPlan,
@@ -146,7 +160,8 @@ export async function executePlanStreaming(
     );
 
     if (!result) {
-      throw new Error(
+      throw new StageExecutionError(
+        stageIdx,
         `Stage ${stageIdx} (${stage.capability}) failed: no healthy nodes available after fallback`,
       );
     }
