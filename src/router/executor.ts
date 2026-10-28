@@ -225,6 +225,7 @@ export async function executePlanStreaming(
   if (!streamGen) {
     throw new Error(`No streaming-capable node available for capability "${finalStage.capability}"`);
   }
+  const upstream: AsyncGenerator<string> = streamGen;
 
   rlog.info('streaming final stage', {
     capability: finalStage.capability,
@@ -235,86 +236,104 @@ export async function executePlanStreaming(
   const created = Math.floor(Date.now() / 1000);
   const finalNodeId = streamNodeId;
 
-  const stream = new ReadableStream<Uint8Array>({
-    async start(controller) {
-      const encoder = new TextEncoder();
+  // Produces the SSE bytes for the final stage. Driven by the stream's pull()
+  // below, so an upstream truncation errors the stream only after every chunk
+  // produced before it has been handed to the reader (#3).
+  async function* produceSse(): AsyncGenerator<Uint8Array> {
+    const encoder = new TextEncoder();
 
-      // Send initial chunk with role
-      const initialChunk: ChatCompletionChunk = {
-        id: chunkId,
-        object: 'chat.completion.chunk',
-        created,
-        model,
-        choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
-      };
-      controller.enqueue(encoder.encode(`data: ${JSON.stringify(initialChunk)}\n\n`));
+    // Send initial chunk with role
+    const initialChunk: ChatCompletionChunk = {
+      id: chunkId,
+      object: 'chat.completion.chunk',
+      created,
+      model,
+      choices: [{ index: 0, delta: { role: 'assistant' }, finish_reason: null }],
+    };
+    yield encoder.encode(`data: ${JSON.stringify(initialChunk)}\n\n`);
 
-      try {
-        // Emit the first chunk that was consumed during validation
-        if (streamFirstChunk) {
-          if (streamFirstChunk.startsWith(TOOL_CALLS_MARKER)) {
-            mergeToolCallDeltas(toolCallMap, streamFirstChunk);
-          } else if (streamFirstChunk.startsWith(FINISH_REASON_MARKER)) {
-            streamFinishReason = streamFirstChunk.slice(FINISH_REASON_MARKER.length);
-          } else {
-            const chunk: ChatCompletionChunk = {
-              id: chunkId,
-              object: 'chat.completion.chunk',
-              created,
-              model,
-              choices: [{ index: 0, delta: { content: streamFirstChunk }, finish_reason: null }],
-            };
-            controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
-          }
-        }
-
-        for await (const text of streamGen) {
-          if (text.startsWith(TOOL_CALLS_MARKER)) {
-            mergeToolCallDeltas(toolCallMap, text);
-            continue;
-          }
-          if (text.startsWith(FINISH_REASON_MARKER)) {
-            streamFinishReason = text.slice(FINISH_REASON_MARKER.length);
-            continue;
-          }
+    try {
+      // Emit the first chunk that was consumed during validation
+      if (streamFirstChunk) {
+        if (streamFirstChunk.startsWith(TOOL_CALLS_MARKER)) {
+          mergeToolCallDeltas(toolCallMap, streamFirstChunk);
+        } else if (streamFirstChunk.startsWith(FINISH_REASON_MARKER)) {
+          streamFinishReason = streamFirstChunk.slice(FINISH_REASON_MARKER.length);
+        } else {
           const chunk: ChatCompletionChunk = {
             id: chunkId,
             object: 'chat.completion.chunk',
             created,
             model,
-            choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
+            choices: [{ index: 0, delta: { content: streamFirstChunk }, finish_reason: null }],
           };
-          controller.enqueue(encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`));
+          yield encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
         }
+      }
 
-        // Send final chunk
-        const doneChunk: ChatCompletionChunk = {
+      for await (const text of upstream) {
+        if (text.startsWith(TOOL_CALLS_MARKER)) {
+          mergeToolCallDeltas(toolCallMap, text);
+          continue;
+        }
+        if (text.startsWith(FINISH_REASON_MARKER)) {
+          streamFinishReason = text.slice(FINISH_REASON_MARKER.length);
+          continue;
+        }
+        const chunk: ChatCompletionChunk = {
           id: chunkId,
           object: 'chat.completion.chunk',
           created,
           model,
-          choices: [{
-            index: 0,
-            delta: toolCallMap.size > 0
-              ? { tool_calls: Array.from(toolCallMap.entries()).map(([idx, tc]) => ({ index: idx, ...tc })) }
-              : {},
-            finish_reason: streamFinishReason,
-          }],
+          choices: [{ index: 0, delta: { content: text }, finish_reason: null }],
         };
-        controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
-        controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-        controller.close();
+        yield encoder.encode(`data: ${JSON.stringify(chunk)}\n\n`);
+      }
 
-        registry.updateHealth(finalNodeId, 'healthy');
+      // Send final chunk
+      const doneChunk: ChatCompletionChunk = {
+        id: chunkId,
+        object: 'chat.completion.chunk',
+        created,
+        model,
+        choices: [{
+          index: 0,
+          delta: toolCallMap.size > 0
+            ? { tool_calls: Array.from(toolCallMap.entries()).map(([idx, tc]) => ({ index: idx, ...tc })) }
+            : {},
+          finish_reason: streamFinishReason,
+        }],
+      };
+      yield encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`);
+      yield encoder.encode('data: [DONE]\n\n');
+
+      registry.updateHealth(finalNodeId, 'healthy');
+    } catch (err) {
+      registry.updateHealth(
+        finalNodeId,
+        'unhealthy',
+        undefined,
+        err instanceof Error ? err.message : String(err),
+      );
+      throw err;
+    }
+  }
+
+  const sse = produceSse();
+  // pull() runs only when the queue is empty, so controller.error on a
+  // truncated upstream never discards chunks that were already queued (#3).
+  const stream = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await sse.next();
+        if (next.done) controller.close();
+        else controller.enqueue(next.value);
       } catch (err) {
-        registry.updateHealth(
-          finalNodeId,
-          'unhealthy',
-          undefined,
-          err instanceof Error ? err.message : String(err),
-        );
         controller.error(err);
       }
+    },
+    async cancel() {
+      await sse.return(undefined);
     },
   });
 
