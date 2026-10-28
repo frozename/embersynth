@@ -349,21 +349,39 @@ export async function routeStreaming(
       log.info('no streaming-capable nodes available, falling back to non-streaming', {
         nodeId: finalStage.nodeId,
       });
-      const execResult = await executePlan(
-        planResult.plan,
-        request.messages,
-        registry,
-        config.policy,
-        profile,
-        {
-          temperature: request.temperature,
-          maxTokens: request.max_tokens,
-          tools: request.tools,
-          toolChoice: request.tool_choice,
-        },
-        signal,
-      );
-      return convertToSSEStream(execResult, request.model);
+      try {
+        const execResult = await executePlan(
+          planResult.plan,
+          request.messages,
+          registry,
+          config.policy,
+          profile,
+          {
+            temperature: request.temperature,
+            maxTokens: request.max_tokens,
+            tools: request.tools,
+            toolChoice: request.tool_choice,
+          },
+          signal,
+        );
+        return convertToSSEStream(execResult, request.model);
+      } catch (err) {
+        // Same 502 shape as route(), so the failure does not escape to the
+        // server catch-all as a generic 500 (#7).
+        const message = err instanceof Error ? err.message : String(err);
+        log.error('execution failed', {
+          planId: planResult.plan.id,
+          error: message,
+        });
+        traceCtx?.record('error', { message });
+        return {
+          ok: false,
+          error: {
+            status: 502,
+            message: err instanceof Error ? err.message : 'Execution failed',
+          },
+        };
+      }
     }
   }
 
