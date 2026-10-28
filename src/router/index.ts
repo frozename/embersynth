@@ -572,6 +572,17 @@ export async function routeEmbedding(
       return { ok: true, result, model: request.model, nodeId: node.id };
     } catch (err) {
       lastError = err instanceof Error ? err.message : String(err);
+      // #8: a caller cancel is not a node failure; stop without touching health.
+      if (signal?.aborted) {
+        traceCtx?.record('error', { nodeId: node.id, message: lastError });
+        return {
+          ok: false,
+          error: {
+            status: 502,
+            message: `Embedding request cancelled by the caller: ${lastError}`,
+          },
+        };
+      }
       registry.updateHealth(node.id, 'unhealthy', undefined, lastError);
       traceCtx?.record('error', { nodeId: node.id, message: lastError });
       // Continue to next candidate
