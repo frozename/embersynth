@@ -83,7 +83,7 @@ function defaultOnUsageObservation(
 
 function novaProviderForNode(
   node: NodeDefinition,
-  overrides?: { healthPath?: string; skipUsage?: boolean },
+  overrides?: { healthPath?: string; skipUsage?: boolean; fetch?: typeof globalThis.fetch },
 ): ReturnType<typeof nova.createOpenAICompatProvider> {
   const baseUrl = `${node.endpoint}/v1`;
   const token = node.auth.type === 'bearer' ? node.auth.token ?? '' : '';
@@ -99,6 +99,7 @@ function novaProviderForNode(
     ...(Object.keys(extraHeaders).length > 0 ? { extraHeaders } : {}),
     ...(overrides?.healthPath ? { healthPath: overrides.healthPath } : {}),
     ...(onUsageObservation ? { onUsageObservation } : {}),
+    ...(overrides?.fetch ? { fetch: overrides.fetch } : {}),
   });
 }
 
@@ -119,6 +120,20 @@ function mergedRequestSignal(
       : controller.signal,
     cancel: () => clearTimeout(timeoutId),
   };
+}
+
+/**
+ * Wrap the global fetch so every call also carries `signal`, merged
+ * with any signal the caller passes in `init`. Nova's healthCheck()
+ * takes no signal, so checkHealth uses this to bound the probe (#19).
+ */
+function fetchWithSignal(signal: AbortSignal): typeof globalThis.fetch {
+  const wrapped = (input: string | URL | Request, init?: RequestInit): Promise<Response> =>
+    fetch(input, {
+      ...init,
+      signal: init?.signal ? AbortSignal.any([init.signal, signal]) : signal,
+    });
+  return Object.assign(wrapped, { preconnect: fetch.preconnect.bind(fetch) });
 }
 
 /** Shape AdapterRequest into Nova's UnifiedAiRequest. Applies
@@ -304,7 +319,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     }
   }
 
-  async checkHealth(node: NodeDefinition, _signal?: AbortSignal): Promise<HealthStatus> {
+  async checkHealth(node: NodeDefinition, signal?: AbortSignal): Promise<HealthStatus> {
     // Nova's createOpenAICompatProvider accepts a healthPath override;
     // pass embersynth's configured /health (or whatever the operator
     // set) so Nova probes the right endpoint. baseUrl still includes
@@ -314,9 +329,13 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
     // the node with `health.endpoint: '/../health'` or point the node
     // at a bare host without /v1.
     const healthEndpoint = node.health.endpoint ?? '/health';
+    // #19: bound the probe by node.health.timeoutMs (and the caller's
+    // signal) so a /health that never answers resolves as unhealthy.
+    const probeSignal = mergedRequestSignal(node.health.timeoutMs ?? 5_000, signal);
     const provider = novaProviderForNode(node, {
       healthPath: healthEndpoint,
       skipUsage: true, // health probes don't need usage logging
+      fetch: fetchWithSignal(probeSignal.signal),
     });
     const start = Date.now();
     try {
@@ -347,6 +366,8 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
         consecutiveFailures: 1,
         error: err instanceof Error ? err.message : String(err),
       };
+    } finally {
+      probeSignal.cancel();
     }
   }
 }
