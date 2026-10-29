@@ -8,6 +8,8 @@ function truncateContent(content: string, maxLength: number): string {
 
   // Keep beginning and end, mark truncation
   const keepEach = Math.floor((maxLength - 40) / 2);
+  // #15: below 42 there is no room for head + marker + tail, so cut hard to stay within maxLength.
+  if (keepEach <= 0) return content.slice(0, maxLength);
   return (
     content.slice(0, keepEach) +
     '\n\n[... truncated ...]\n\n' +
@@ -45,6 +47,12 @@ function extractKeySentences(content: string, maxLength: number): string {
   return result.length > 0 ? result.join(' ') : truncateContent(content, maxLength);
 }
 
+/** Resolve the per-item limit; a non-positive or non-finite value falls back to the default (#15) */
+function resolveMaxLength(configured: number | undefined): number {
+  if (configured === undefined) return DEFAULT_MAX_LENGTH;
+  return Number.isFinite(configured) && configured > 0 ? configured : DEFAULT_MAX_LENGTH;
+}
+
 /** Compress an evidence bundle to reduce token usage in synthesis */
 export function compressEvidence(
   bundle: EvidenceBundle,
@@ -52,7 +60,7 @@ export function compressEvidence(
 ): EvidenceBundle {
   if (!policy.evidenceCompression) return bundle;
 
-  const maxLength = policy.evidenceMaxLength ?? DEFAULT_MAX_LENGTH;
+  const maxLength = resolveMaxLength(policy.evidenceMaxLength);
 
   const compressedItems: EvidenceItem[] = bundle.items.map((item) => {
     if (item.content.length <= maxLength) return item;
