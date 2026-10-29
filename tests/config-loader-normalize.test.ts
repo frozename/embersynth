@@ -198,3 +198,87 @@ describe('config loader: resolveConfigPath (#22)', () => {
     expect(resolveConfigPath(join(tempDir, 'missing.yaml'))).toBeUndefined();
   });
 });
+
+describe('config loader: policy coercion (#34)', () => {
+  test('interpolated policy strings become numbers and booleans', () => {
+    const config = loadWith(
+      writeConfig(
+        'policy:\n  maxRetries: "${ES_PIN_RETRIES:-2}"\n  retryDelayMs: "${ES_PIN_DELAY:-10}"\n  requireHealthy: "${ES_PIN_RH:-false}"\n',
+      ),
+      { ES_PIN_RETRIES: undefined, ES_PIN_DELAY: undefined, ES_PIN_RH: undefined },
+    );
+    expect(config.policy.maxRetries).toBe(2);
+    expect(config.policy.retryDelayMs).toBe(10);
+    expect(config.policy.requireHealthy).toBe(false);
+    expect(config.policy).toEqual({
+      fallbackEnabled: true,
+      maxRetries: 2,
+      retryDelayMs: 10,
+      requireHealthy: false,
+      evidenceCompression: false,
+    });
+  });
+
+  test('the strings "false" and "true" switch every boolean policy key', () => {
+    const config = loadWith(
+      writeConfig(
+        'policy:\n  fallbackEnabled: "${ES_PIN_FB:-true}"\n  requireHealthy: "false"\n  evidenceCompression: "${ES_PIN_EC:-false}"\n',
+      ),
+      { ES_PIN_FB: 'false', ES_PIN_EC: 'true' },
+    );
+    expect(config.policy.fallbackEnabled).toBe(false);
+    expect(config.policy.requireHealthy).toBe(false);
+    expect(config.policy.evidenceCompression).toBe(true);
+  });
+
+  test('a non-numeric maxRetries falls back to 2 and an empty retryDelayMs to 500', () => {
+    const config = loadWith(writeConfig('policy:\n  maxRetries: abc\n  retryDelayMs: ""\n'));
+    expect(config.policy.maxRetries).toBe(2);
+    expect(config.policy.retryDelayMs).toBe(500);
+  });
+
+  test('maxRetries is clamped to a non-negative integer and a non-finite value gives 2', () => {
+    expect(loadWith(writeConfig('policy:\n  maxRetries: -3\n')).policy.maxRetries).toBe(0);
+    expect(loadWith(writeConfig('policy:\n  maxRetries: "1.7"\n')).policy.maxRetries).toBe(1);
+    expect(loadWith(writeConfig('policy:\n  maxRetries: "Infinity"\n')).policy.maxRetries).toBe(2);
+  });
+
+  test('a value that is not a boolean or "true"/"false" keeps the default', () => {
+    const config = loadWith(
+      writeConfig('policy:\n  requireHealthy: 0\n  fallbackEnabled: "no"\n  evidenceCompression: "yes"\n'),
+    );
+    expect(config.policy.requireHealthy).toBe(true);
+    expect(config.policy.fallbackEnabled).toBe(true);
+    expect(config.policy.evidenceCompression).toBe(false);
+  });
+
+  test('evidenceMaxLength is coerced when numeric and left absent otherwise', () => {
+    const coerced = loadWith(writeConfig('policy:\n  evidenceMaxLength: "${ES_PIN_EML:-300}"\n'), {
+      ES_PIN_EML: undefined,
+    });
+    expect(coerced.policy.evidenceMaxLength).toBe(300);
+    const unset = loadWith(writeConfig('policy:\n  maxRetries: 1\n'));
+    expect('evidenceMaxLength' in unset.policy).toBe(false);
+    const invalid = loadWith(writeConfig('policy:\n  evidenceMaxLength: abc\n'));
+    expect('evidenceMaxLength' in invalid.policy).toBe(false);
+  });
+
+  test('unknown policy keys are dropped and a null or scalar policy gives the defaults', () => {
+    const defaults = {
+      fallbackEnabled: true,
+      maxRetries: 2,
+      retryDelayMs: 500,
+      requireHealthy: true,
+      evidenceCompression: false,
+    };
+    expect(Object.keys(loadWith(writeConfig('policy:\n  maxRetries: 1\n  extra: 7\n')).policy).sort()).toEqual([
+      'evidenceCompression',
+      'fallbackEnabled',
+      'maxRetries',
+      'requireHealthy',
+      'retryDelayMs',
+    ]);
+    expect(loadWith(writeConfig('policy:\n')).policy).toEqual(defaults);
+    expect(loadWith(writeConfig('policy: 5\n')).policy).toEqual(defaults);
+  });
+});
