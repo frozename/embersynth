@@ -339,10 +339,13 @@ export async function routeStreaming(
     alternates = registry.sortByPriority(alternates);
     alternates = registry.applyProfileConstraints(alternates, profile);
 
-    const hasStreamingAlternate = alternates.some((n) => {
-      const a = getAdapter(n.providerType);
-      return !!a?.sendStreamingRequest;
-    });
+    // #43: with fallback disabled, never stream from another node; use the buffered path.
+    const hasStreamingAlternate =
+      config.policy.fallbackEnabled &&
+      alternates.some((n) => {
+        const a = getAdapter(n.providerType);
+        return !!a?.sendStreamingRequest;
+      });
 
     if (!hasStreamingAlternate) {
       // No streaming-capable nodes at all — fall back to non-streaming
