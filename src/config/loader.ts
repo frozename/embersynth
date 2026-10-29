@@ -2,7 +2,7 @@ import { readFileSync, existsSync } from 'fs';
 import { parse as parseYaml } from 'yaml';
 import { DEFAULT_CONFIG, DEFAULT_POLICY, DEFAULT_PROFILES, SYNTHETIC_MODEL_MAP } from './defaults.js';
 import { CAPABILITIES } from '../types/index.js';
-import type { EmberSynthConfig, NodeDefinition, NodeAuth, RoutingProfile } from '../types/index.js';
+import type { EmberSynthConfig, NodeDefinition, NodeAuth, RoutingPolicy, RoutingProfile } from '../types/index.js';
 import { log } from '../logger/index.js';
 
 /** Parse a numeric value, using fallback only when the raw value is null/undefined/NaN/empty-string */
@@ -11,6 +11,13 @@ function num(raw: unknown, fallback: number): number {
   if (typeof raw === 'string' && raw.trim() === '') return fallback;
   const n = Number(raw);
   return Number.isNaN(n) ? fallback : n;
+}
+
+/** #34: true/'true' give true and false/'false' give false; any other value keeps the fallback. */
+function bool(raw: unknown, fallback: boolean): boolean {
+  if (raw === true || raw === 'true') return true;
+  if (raw === false || raw === 'false') return false;
+  return fallback;
 }
 
 const CONFIG_PATHS = [
@@ -100,6 +107,26 @@ function normalizeProfile(raw: Record<string, unknown>): RoutingProfile {
     maxStages: raw.maxStages as number | undefined,
     synthesisRequired: raw.synthesisRequired as boolean | undefined,
   };
+}
+
+/**
+ * #34: coerce the YAML policy. ${VAR} interpolation always yields strings, so
+ * maxRetries "2" would make `maxRetries + 1` the string "21" and "false" would
+ * be truthy. Unknown keys are dropped; evidenceMaxLength stays absent unless numeric.
+ */
+function normalizePolicy(rawPolicy: unknown): RoutingPolicy {
+  const raw = rawPolicy && typeof rawPolicy === 'object' ? (rawPolicy as Record<string, unknown>) : {};
+  const retries = num(raw.maxRetries, DEFAULT_POLICY.maxRetries);
+  const policy: RoutingPolicy = {
+    fallbackEnabled: bool(raw.fallbackEnabled, DEFAULT_POLICY.fallbackEnabled),
+    maxRetries: Number.isFinite(retries) ? Math.max(0, Math.floor(retries)) : DEFAULT_POLICY.maxRetries,
+    retryDelayMs: num(raw.retryDelayMs, DEFAULT_POLICY.retryDelayMs),
+    requireHealthy: bool(raw.requireHealthy, DEFAULT_POLICY.requireHealthy),
+    evidenceCompression: bool(raw.evidenceCompression, DEFAULT_POLICY.evidenceCompression),
+  };
+  const evidenceMaxLength = num(raw.evidenceMaxLength, Number.NaN);
+  if (!Number.isNaN(evidenceMaxLength)) policy.evidenceMaxLength = evidenceMaxLength;
+  return policy;
 }
 
 function validateConfig(config: EmberSynthConfig): string[] {
@@ -195,10 +222,7 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
     profiles: rawConfig?.profiles
       ? (rawConfig.profiles as Record<string, unknown>[]).map(normalizeProfile)
       : DEFAULT_PROFILES,
-    policy: {
-      ...DEFAULT_POLICY,
-      ...((rawConfig?.policy as Partial<typeof DEFAULT_POLICY>) ?? {}),
-    },
+    policy: normalizePolicy(rawConfig?.policy),
     syntheticModels: {
       ...SYNTHETIC_MODEL_MAP,
       ...((rawConfig?.syntheticModels as Record<string, string>) ?? {}),
