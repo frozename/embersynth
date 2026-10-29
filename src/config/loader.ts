@@ -23,8 +23,14 @@ const CONFIG_PATHS = [
 /** Resolve env var references like ${VAR_NAME} or ${VAR_NAME:-default} */
 function interpolateEnv(value: string): string {
   return value.replace(/\$\{([^}]+)\}/g, (_, expr: string) => {
-    const [name, fallback] = expr.split(':-');
-    return process.env[name.trim()] ?? fallback?.trim() ?? '';
+    // #21: like POSIX `:-`, use the fallback when the variable is unset OR
+    // empty. Split on the first `:-` only, so the fallback may contain `:-`.
+    const sep = expr.indexOf(':-');
+    if (sep < 0) return process.env[expr.trim()] ?? '';
+    const name = expr.slice(0, sep).trim();
+    const fallback = expr.slice(sep + 2).trim();
+    const envValue = process.env[name];
+    return envValue === undefined || envValue === '' ? fallback : envValue;
   });
 }
 
@@ -170,14 +176,16 @@ export function loadConfig(configPath?: string): EmberSynthConfig {
   }
 
   // Apply env var overrides
-  const envHost = process.env.EMBERSYNTH_HOST;
+  // #21: an empty or whitespace-only EMBERSYNTH_HOST counts as unset, like EMBERSYNTH_PORT.
+  const envHost = process.env.EMBERSYNTH_HOST?.trim() || undefined;
   const envPort = process.env.EMBERSYNTH_PORT;
 
   const serverRaw = (rawConfig?.server as Record<string, unknown>) ?? {};
 
   const config: EmberSynthConfig = {
     server: {
-      host: envHost ?? (serverRaw.host as string) ?? DEFAULT_CONFIG.server.host,
+      // #21: an empty YAML host falls back too; Bun.serve binds every interface for ''.
+      host: envHost ?? ((serverRaw.host as string) || DEFAULT_CONFIG.server.host),
       port: envPort ? num(parseInt(envPort, 10), DEFAULT_CONFIG.server.port) : num(serverRaw.port, DEFAULT_CONFIG.server.port),
       ...optionalServerFields(serverRaw),
     },
