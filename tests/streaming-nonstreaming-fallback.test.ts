@@ -11,6 +11,7 @@ import type {
   NodeDefinition,
   ProviderAdapter,
 } from '../src/types/index.js';
+import type { ToolCall } from '../src/types/tools.js';
 import type { TraceContext } from '../src/tracing/context.js';
 import type { TraceEvent } from '../src/tracing/store.js';
 import { registerAdapter, resetAdapters } from '../src/adapters/index.js';
@@ -22,16 +23,18 @@ import { routeStreaming, type StreamingRouterResult } from '../src/router/index.
 class NoStreamAdapter implements ProviderAdapter {
   readonly type = 'nostream';
   private readonly failMessage: string | null;
+  private readonly response: AdapterResponse;
 
-  constructor(failMessage: string | null) {
+  constructor(failMessage: string | null, response?: AdapterResponse) {
     this.failMessage = failMessage;
+    this.response = response ?? { content: 'hi', finishReason: 'stop' };
   }
 
   async sendRequest(_node: NodeDefinition, _request: AdapterRequest): Promise<AdapterResponse> {
     if (this.failMessage !== null) {
       throw new Error(this.failMessage);
     }
-    return { content: 'hi', finishReason: 'stop' };
+    return this.response;
   }
 
   async checkHealth(node: NodeDefinition): Promise<HealthStatus> {
@@ -120,6 +123,23 @@ async function readAll(stream: ReadableStream<Uint8Array>): Promise<string> {
   return text;
 }
 
+const weatherCall: ToolCall = {
+  id: 'call_1',
+  type: 'function',
+  function: { name: 'get_weather', arguments: '{"city":"Lisbon"}' },
+};
+
+/** Runs the fallback with a fake adapter returning `response` and returns the whole SSE body. */
+async function fallbackText(response: AdapterResponse): Promise<string> {
+  const events: RecordedTrace[] = [];
+  const { result, rejection } = await settleRoute(new NoStreamAdapter(null, response), events);
+  expect(rejection).toBeNull();
+  if (result === null || !result.ok) {
+    throw new Error('expected an ok:true router result');
+  }
+  return readAll(result.result.stream);
+}
+
 describe('routeStreaming non-streaming fallback (#7)', () => {
   beforeEach(() => {
     tempDir = mkdtempSync(join(tmpdir(), 'embersynth-nostream-'));
@@ -165,5 +185,51 @@ describe('routeStreaming non-streaming fallback (#7)', () => {
     expect(text).toContain('"finish_reason":"stop"');
     expect(text.endsWith('data: [DONE]\n\n')).toBe(true);
     expect(events.some((e) => e.phase === 'error')).toBe(false);
+  });
+
+  test('the fallback passes through finish_reason length (#11)', async () => {
+    const text = await fallbackText({ content: 'partial', finishReason: 'length' });
+
+    expect(text).toContain('"content":"partial"');
+    expect(text).toContain('"finish_reason":"length"');
+    expect(text).not.toContain('"finish_reason":"stop"');
+    expect(text.endsWith('data: [DONE]\n\n')).toBe(true);
+  });
+
+  test('the fallback passes through finish_reason content_filter (#11)', async () => {
+    const text = await fallbackText({ content: 'filtered', finishReason: 'content_filter' });
+
+    expect(text).toContain('"finish_reason":"content_filter"');
+    expect(text).not.toContain('"finish_reason":"stop"');
+  });
+
+  test('an empty toolCalls array reports stop and no tool_calls (#11)', async () => {
+    const text = await fallbackText({ content: 'x', finishReason: 'stop', toolCalls: [] });
+
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).not.toContain('tool_calls');
+  });
+
+  test('a tool call with finish_reason tool_calls emits the tool_calls delta (#11)', async () => {
+    const text = await fallbackText({ content: '', finishReason: 'tool_calls', toolCalls: [weatherCall] });
+
+    expect(text).toContain('"tool_calls":[{"index":0,"id":"call_1","type":"function"');
+    expect(text).toContain('"finish_reason":"tool_calls"');
+    expect(text).not.toContain('"finish_reason":"stop"');
+  });
+
+  test('a tool call with finish_reason stop still ends with tool_calls (#11)', async () => {
+    const text = await fallbackText({ content: '', finishReason: 'stop', toolCalls: [weatherCall] });
+
+    expect(text).toContain('"tool_calls":[{"index":0,"id":"call_1"');
+    expect(text).toContain('"finish_reason":"tool_calls"');
+    expect(text).not.toContain('"finish_reason":"stop"');
+  });
+
+  test('an empty finishReason without tool calls ends with stop (#11)', async () => {
+    const text = await fallbackText({ content: 'x', finishReason: '' });
+
+    expect(text).toContain('"finish_reason":"stop"');
+    expect(text).not.toContain('tool_calls');
   });
 });
