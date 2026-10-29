@@ -24,6 +24,8 @@ interface StubScript {
   sseBody?: string;
   /** Emit one chunk then keep the stream open forever. */
   sseHang?: boolean;
+  /** GET /v1/health never answers (#19). */
+  healthHang?: boolean;
 }
 
 let script: StubScript = {};
@@ -106,6 +108,12 @@ beforeAll(() => {
           model: body?.model ?? 'stub-model',
           usage: { prompt_tokens: 1, total_tokens: 1 },
         });
+      }
+
+      if (url.pathname === '/v1/health') {
+        // Never resolves: accepts the connection and never answers.
+        if (script.healthHang) return new Promise<Response>(() => {});
+        return Response.json({ status: 'ok' });
       }
 
       return new Response('nf', { status: 404 });
@@ -260,5 +268,61 @@ describe('openai-compat adapter — stream termination (A3)', () => {
     ).rejects.toThrow(/toolcall-trunc/);
     expect(got.length).toBe(1);
     expect(got[0]!.startsWith(TOOL_CALLS_MARKER)).toBe(true);
+  });
+});
+
+const STILL_PENDING = 'STILL_PENDING' as const;
+
+/** Resolve with `p`, or with STILL_PENDING when `p` has not settled after `ms`. */
+async function settleWithin<T>(p: Promise<T>, ms: number): Promise<T | typeof STILL_PENDING> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const guard = new Promise<typeof STILL_PENDING>((resolve) => {
+    timer = setTimeout(() => resolve(STILL_PENDING), ms);
+  });
+  try {
+    return await Promise.race([p, guard]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function healthNode(id: string, healthTimeoutMs: number): NodeDefinition {
+  return {
+    ...node(id),
+    health: { endpoint: '/health', intervalMs: 30_000, timeoutMs: healthTimeoutMs },
+  };
+}
+
+describe('openai-compat adapter: health probe deadline (#19)', () => {
+  test('checkHealth reports unhealthy at node.health.timeoutMs when /health never answers', async () => {
+    script = { healthHang: true };
+    const adapter = new OpenAICompatibleAdapter();
+    const res = await settleWithin(adapter.checkHealth(healthNode('hung-health', 150)), 2_000);
+    expect(res).not.toBe(STILL_PENDING);
+    if (res === STILL_PENDING) return;
+    expect(res.state).toBe('unhealthy');
+    expect(res.consecutiveFailures).toBe(1);
+    expect(res.error).toMatch(/abort/i);
+  });
+
+  test('checkHealth stops a hung /health probe when the caller signal aborts', async () => {
+    script = { healthHang: true };
+    const adapter = new OpenAICompatibleAdapter();
+    const caller = new AbortController();
+    const pending = adapter.checkHealth(healthNode('caller-health', 30_000), caller.signal);
+    caller.abort();
+    const res = await settleWithin(pending, 2_000);
+    expect(res).not.toBe(STILL_PENDING);
+    if (res === STILL_PENDING) return;
+    expect(res.state).toBe('unhealthy');
+    expect(res.error).toMatch(/abort/i);
+  });
+
+  test('checkHealth reports healthy when /health answers within the deadline', async () => {
+    const adapter = new OpenAICompatibleAdapter();
+    const res = await adapter.checkHealth(healthNode('ok-health', 1_000));
+    expect(res.state).toBe('healthy');
+    expect(res.consecutiveFailures).toBe(0);
+    expect(res.error).toBeUndefined();
   });
 });
