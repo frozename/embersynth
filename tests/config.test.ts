@@ -144,3 +144,103 @@ describe('server.watch and server.logLevel from the YAML file (#13)', () => {
     expect(config.server.logLevel).toBeUndefined();
   });
 });
+
+describe('empty env values fall back to defaults (#21)', () => {
+  let tempDir = '';
+
+  afterEach(() => {
+    if (tempDir !== '') {
+      rmSync(tempDir, { recursive: true, force: true });
+      tempDir = '';
+    }
+  });
+
+  function writeConfig(body: string): string {
+    tempDir = mkdtempSync(join(tmpdir(), 'es-config-21-'));
+    const configPath = join(tempDir, 'embersynth.yaml');
+    writeFileSync(configPath, body);
+    return configPath;
+  }
+
+  /** Set (string) or delete (undefined) each variable, run fn, then restore the previous values. */
+  function withEnv(vars: Record<string, string | undefined>, fn: () => void): void {
+    const previous: Record<string, string | undefined> = {};
+    for (const name of Object.keys(vars)) previous[name] = process.env[name];
+    try {
+      for (const [name, value] of Object.entries(vars)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+      fn();
+    } finally {
+      for (const [name, value] of Object.entries(previous)) {
+        if (value === undefined) Reflect.deleteProperty(process.env, name);
+        else process.env[name] = value;
+      }
+    }
+  }
+
+  const INTERPOLATED_YAML =
+    'server:\n  host: "${ES21_HOST:-10.0.0.7}"\nnodes:\n  - id: n1\n    endpoint: "${ES21_EP:-http://localhost:8080}"\n    capabilities: [reasoning]\n';
+
+  test('empty EMBERSYNTH_HOST and EMBERSYNTH_PORT fall back to the defaults', () => {
+    withEnv({ EMBERSYNTH_HOST: '', EMBERSYNTH_PORT: '' }, () => {
+      const config = loadConfig();
+      expect(config.server.host).toBe('127.0.0.1');
+      expect(config.server.port).toBe(7777);
+    });
+  });
+
+  test('a whitespace-only EMBERSYNTH_HOST falls back to the YAML host', () => {
+    withEnv({ EMBERSYNTH_HOST: '   ', EMBERSYNTH_PORT: undefined }, () => {
+      const config = loadConfig(writeConfig('server:\n  host: 10.0.0.5\n'));
+      expect(config.server.host).toBe('10.0.0.5');
+    });
+  });
+
+  test('a non-empty EMBERSYNTH_HOST still wins over the YAML host', () => {
+    withEnv({ EMBERSYNTH_HOST: '0.0.0.0', EMBERSYNTH_PORT: undefined }, () => {
+      const config = loadConfig(writeConfig('server:\n  host: 10.0.0.5\n'));
+      expect(config.server.host).toBe('0.0.0.0');
+    });
+  });
+
+  test('an empty YAML host falls back to the default host', () => {
+    withEnv({ EMBERSYNTH_HOST: undefined, EMBERSYNTH_PORT: undefined }, () => {
+      const config = loadConfig(writeConfig('server:\n  host: ""\n'));
+      expect(config.server.host).toBe('127.0.0.1');
+    });
+  });
+
+  test('${VAR:-default} uses the default when VAR is set but empty', () => {
+    withEnv({ EMBERSYNTH_HOST: undefined, ES21_HOST: '', ES21_EP: '' }, () => {
+      const config = loadConfig(writeConfig(INTERPOLATED_YAML));
+      expect(config.server.host).toBe('10.0.0.7');
+      expect(config.nodes[0].endpoint).toBe('http://localhost:8080');
+    });
+  });
+
+  test('${VAR:-default} uses a set value, and the default when VAR is unset', () => {
+    withEnv({ EMBERSYNTH_HOST: undefined, ES21_HOST: undefined, ES21_EP: 'http://x:1' }, () => {
+      const config = loadConfig(writeConfig(INTERPOLATED_YAML));
+      expect(config.server.host).toBe('10.0.0.7');
+      expect(config.nodes[0].endpoint).toBe('http://x:1');
+    });
+  });
+
+  test('a fallback that contains :- is kept whole', () => {
+    withEnv({ EMBERSYNTH_HOST: undefined, ES21_UNSET: undefined }, () => {
+      const config = loadConfig(writeConfig('server:\n  host: "${ES21_UNSET:-a:-b}"\n'));
+      expect(config.server.host).toBe('a:-b');
+    });
+  });
+
+  test('plain ${VAR} with an empty value stays empty', () => {
+    withEnv({ ES21_EMPTY: '' }, () => {
+      const config = loadConfig(
+        writeConfig('nodes:\n  - id: n1\n    endpoint: "${ES21_EMPTY}"\n    capabilities: [reasoning]\n'),
+      );
+      expect(config.nodes[0].endpoint).toBe('');
+    });
+  });
+});
