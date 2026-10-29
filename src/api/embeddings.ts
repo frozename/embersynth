@@ -3,22 +3,41 @@ import type { NodeRegistry } from '../registry/registry.js';
 import type { TraceContext } from '../tracing/context.js';
 import { routeEmbedding } from '../router/index.js';
 
+/**
+ * #36: input must be a string or an array of strings. Checked before routing,
+ * so a malformed request never reaches a node or counts against its health.
+ */
+function isValidEmbeddingInput(input: unknown): boolean {
+  if (typeof input === 'string') return true;
+  return Array.isArray(input) && input.every((v: unknown) => typeof v === 'string');
+}
+
 export async function handleEmbeddings(
   req: Request,
   config: EmberSynthConfig,
   registry: NodeRegistry,
   traceCtx?: TraceContext,
 ): Promise<Response> {
-  let body: EmbeddingRequest;
+  let parsed: unknown;
 
   try {
-    body = (await req.json()) as EmbeddingRequest;
+    parsed = await req.json();
   } catch {
     return Response.json(
       { error: { message: 'Invalid JSON body', type: 'invalid_request_error' } },
       { status: 400 },
     );
   }
+
+  // #36: a JSON null body would make `body.model` throw and turn into a 500.
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) {
+    return Response.json(
+      { error: { message: 'Request body must be a JSON object', type: 'invalid_request_error' } },
+      { status: 400 },
+    );
+  }
+
+  const body = parsed as EmbeddingRequest;
 
   if (!body.model) {
     return Response.json(
@@ -27,9 +46,16 @@ export async function handleEmbeddings(
     );
   }
 
-  if (!body.input) {
+  if (!body.input || (Array.isArray(body.input) && body.input.length === 0)) {
     return Response.json(
       { error: { message: 'Missing required field: input', type: 'invalid_request_error' } },
+      { status: 400 },
+    );
+  }
+
+  if (!isValidEmbeddingInput(body.input)) {
+    return Response.json(
+      { error: { message: 'Invalid field: input', type: 'invalid_request_error' } },
       { status: 400 },
     );
   }
