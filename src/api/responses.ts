@@ -40,6 +40,18 @@ function toMessages(request: ResponsesRequest): ChatMessage[] {
   return messages;
 }
 
+/**
+ * #18: input must be a string or an array of message objects with a string
+ * role. Anything else would crash toMessages or be forwarded upstream as-is.
+ */
+function isValidInput(input: unknown): boolean {
+  if (typeof input === 'string') return true;
+  if (!Array.isArray(input)) return false;
+  return input.every(
+    (msg: unknown) => typeof msg === 'object' && msg !== null && 'role' in msg && typeof msg.role === 'string',
+  );
+}
+
 export async function handleResponses(
   req: Request,
   config: EmberSynthConfig,
@@ -64,9 +76,16 @@ export async function handleResponses(
     );
   }
 
-  if (!body.input) {
+  if (!body.input || (Array.isArray(body.input) && body.input.length === 0)) {
     return Response.json(
       { error: { message: 'Missing required field: input', type: 'invalid_request_error' } },
+      { status: 400 },
+    );
+  }
+
+  if (!isValidInput(body.input)) {
+    return Response.json(
+      { error: { message: 'Invalid field: input', type: 'invalid_request_error' } },
       { status: 400 },
     );
   }
