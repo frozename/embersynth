@@ -471,6 +471,22 @@ export async function routeStreaming(
   }
 }
 
+/**
+ * finish_reason for the terminal chunk of convertToSSEStream (#11): the upstream
+ * value, except that with tool calls an upstream 'stop' or empty value stays
+ * 'tool_calls' (adapters default a missing finish_reason to 'stop'), and an empty
+ * value without tool calls becomes 'stop'.
+ */
+function terminalFinishReason(finishReason: string | undefined, hasToolCalls: boolean): string {
+  if (!finishReason) {
+    return hasToolCalls ? 'tool_calls' : 'stop';
+  }
+  if (hasToolCalls && finishReason === 'stop') {
+    return 'tool_calls';
+  }
+  return finishReason;
+}
+
 /** 
  * Convert an OrchestrationResult into a single-chunk ReadableStream 
  * for SSE compatibility.
@@ -482,6 +498,7 @@ function convertToSSEStream(
   const encoder = new TextEncoder();
   const content = result.response.content;
   const toolCalls = result.response.toolCalls;
+  const hasToolCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
   const chunkId = `chatcmpl-${Date.now()}`;
   const created = Math.floor(Date.now() / 1000);
 
@@ -496,7 +513,7 @@ function convertToSSEStream(
       };
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(roleChunk)}\n\n`));
 
-      const toolCallDeltas = toolCalls?.map((tc, i) => ({ index: i, ...tc }));
+      const toolCallDeltas = hasToolCalls ? toolCalls?.map((tc, i) => ({ index: i, ...tc })) : undefined;
       const contentChunk = {
         id: chunkId,
         object: 'chat.completion.chunk',
@@ -517,7 +534,7 @@ function convertToSSEStream(
         object: 'chat.completion.chunk',
         created,
         model,
-        choices: [{ index: 0, delta: {}, finish_reason: toolCalls ? 'tool_calls' : 'stop' }],
+        choices: [{ index: 0, delta: {}, finish_reason: terminalFinishReason(result.response.finishReason, hasToolCalls) }],
       };
       controller.enqueue(encoder.encode(`data: ${JSON.stringify(doneChunk)}\n\n`));
       controller.enqueue(encoder.encode('data: [DONE]\n\n'));
