@@ -99,3 +99,88 @@ describe('embeddings integration', () => {
     harness.stop();
   });
 });
+
+// #36: input is validated before routing, so a bad request never reaches a node or its health.
+type ErrorBody = { error: { message: string; type: string } };
+type MetricsBody = { node_details: { id: string; health: string; consecutive_failures: number }[] };
+
+async function postEmbeddings(h: TestHarness, payload: string): Promise<Response> {
+  return fetch(`${h.embersynth.url}/v1/embeddings`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+  });
+}
+
+describe('embeddings input validation (#36)', () => {
+  test('an empty input array returns 400 and never reaches the embedding node', async () => {
+    const h = createTestHarness([{ id: 'embedding-node', capabilities: ['embedding'] }]);
+    try {
+      const res = await postEmbeddings(h, JSON.stringify({ model: 'fusion-auto', input: [] }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrorBody;
+      expect(body.error.type).toBe('invalid_request_error');
+      expect(body.error.message).toBe('Missing required field: input');
+      expect(h.mockNodes[0].requestLog.filter((r) => r.path === '/v1/embeddings').length).toBe(0);
+      const metrics = (await (await fetch(`${h.embersynth.url}/metrics`)).json()) as MetricsBody;
+      const node = metrics.node_details.find((n) => n.id === 'embedding-node');
+      expect(node?.health).toBe('unknown');
+      expect(node?.consecutive_failures).toBe(0);
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('numeric input returns 400, not 503, when no embedding node is configured', async () => {
+    const h = createTestHarness([{ id: 'reasoning-only', capabilities: ['reasoning'] }]);
+    try {
+      const res = await postEmbeddings(h, JSON.stringify({ model: 'fusion-auto', input: [1, 2] }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrorBody;
+      expect(body.error.type).toBe('invalid_request_error');
+      expect(body.error.message).toBe('Invalid field: input');
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('numeric input is rejected before routing when an embedding node exists', async () => {
+    const h = createTestHarness([{ id: 'embedding-node', capabilities: ['embedding'] }]);
+    try {
+      const res = await postEmbeddings(h, JSON.stringify({ model: 'fusion-auto', input: [[1, 2]] }));
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrorBody;
+      expect(body.error.message).toBe('Invalid field: input');
+      expect(body.error.type).toBe('invalid_request_error');
+      expect(h.mockNodes[0].requestLog.filter((r) => r.path === '/v1/embeddings').length).toBe(0);
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('a JSON null body returns 400 instead of 500', async () => {
+    const h = createTestHarness([{ id: 'embedding-node', capabilities: ['embedding'] }]);
+    try {
+      const res = await postEmbeddings(h, 'null');
+      expect(res.status).toBe(400);
+      const body = (await res.json()) as ErrorBody;
+      expect(body.error.type).toBe('invalid_request_error');
+      expect(body.error.message).toBe('Request body must be a JSON object');
+    } finally {
+      h.stop();
+    }
+  });
+
+  test('a single string input still reaches the embedding node', async () => {
+    const h = createTestHarness([{ id: 'embedding-node', capabilities: ['embedding'] }]);
+    try {
+      const res = await postEmbeddings(h, JSON.stringify({ model: 'fusion-auto', input: 'Hello world' }));
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { data: unknown[] };
+      expect(body.data).toHaveLength(1);
+      expect(h.mockNodes[0].requestLog.filter((r) => r.path === '/v1/embeddings').length).toBe(1);
+    } finally {
+      h.stop();
+    }
+  });
+});
