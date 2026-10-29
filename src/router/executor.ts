@@ -198,7 +198,10 @@ export async function executePlanStreaming(
   const sorted = registry.sortByPriority(healthFiltered);
 
   const profileFiltered = registry.applyProfileConstraints(sorted, profile);
-  const candidates = [finalStage.nodeId, ...profileFiltered.map((n) => n.id)];
+  // #43: with fallback disabled only the primary is tried, as in executeStageWithFallback.
+  const candidates = policy.fallbackEnabled
+    ? [finalStage.nodeId, ...profileFiltered.map((n) => n.id)]
+    : [finalStage.nodeId];
 
   for (const candidateId of candidates) {
     if (failedStreamNodes.has(candidateId)) continue;
