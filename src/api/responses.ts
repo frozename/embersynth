@@ -9,6 +9,7 @@ import type {
 import type { NodeRegistry } from '../registry/registry.js';
 import type { TraceContext } from '../tracing/context.js';
 import { route, routeStreaming } from '../router/index.js';
+import { isValidMessages } from './completions.js';
 
 function generateId(): string {
   return `resp-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -43,13 +44,12 @@ function toMessages(request: ResponsesRequest): ChatMessage[] {
 /**
  * #18: input must be a string or an array of message objects with a string
  * role. Anything else would crash toMessages or be forwarded upstream as-is.
+ * #39: array input also goes through isValidMessages, so content is checked.
  */
 function isValidInput(input: unknown): boolean {
   if (typeof input === 'string') return true;
   if (!Array.isArray(input)) return false;
-  return input.every(
-    (msg: unknown) => typeof msg === 'object' && msg !== null && 'role' in msg && typeof msg.role === 'string',
-  );
+  return isValidMessages(input);
 }
 
 export async function handleResponses(

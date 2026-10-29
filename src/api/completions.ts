@@ -7,6 +7,29 @@ function generateId(): string {
   return `chatcmpl-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
+function isValidContentPart(part: unknown): boolean {
+  return typeof part === 'object' && part !== null && 'type' in part && typeof part.type === 'string';
+}
+
+function isValidMessage(msg: unknown): boolean {
+  if (typeof msg !== 'object' || msg === null) return false;
+  if (!('role' in msg) || typeof msg.role !== 'string') return false;
+  if (!('content' in msg)) return true;
+  const content = msg.content;
+  if (content === undefined || content === null || typeof content === 'string') return true;
+  return Array.isArray(content) && content.every(isValidContentPart);
+}
+
+/**
+ * #39: classifyRequest reads msg.content and part.type before any try block,
+ * so a malformed element used to throw (HTTP 500) or be forwarded upstream.
+ * Each message must be an object with a string role; content must be absent,
+ * null, a string, or an array of objects with a string type.
+ */
+export function isValidMessages(messages: unknown[]): boolean {
+  return messages.every(isValidMessage);
+}
+
 export async function handleCompletions(
   req: Request,
   config: EmberSynthConfig,
@@ -34,6 +57,13 @@ export async function handleCompletions(
   if (!body.messages || !Array.isArray(body.messages) || body.messages.length === 0) {
     return Response.json(
       { error: { message: 'Missing required field: messages', type: 'invalid_request_error' } },
+      { status: 400 },
+    );
+  }
+
+  if (!isValidMessages(body.messages)) {
+    return Response.json(
+      { error: { message: 'Invalid field: messages', type: 'invalid_request_error' } },
       { status: 400 },
     );
   }
